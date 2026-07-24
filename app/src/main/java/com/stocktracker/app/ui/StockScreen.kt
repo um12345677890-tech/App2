@@ -21,10 +21,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.automirrored.filled.ShowChart
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -37,6 +39,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -47,9 +51,12 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,9 +86,15 @@ import java.util.Locale
 fun StockScreen(viewModel: StockViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val searchState by viewModel.searchState.collectAsStateWithLifecycle()
+    val compositions by viewModel.compositions.collectAsStateWithLifecycle()
     var showSearchSheet by remember { mutableStateOf(false) }
     var editingHolding by remember { mutableStateOf<TickerUi?>(null) }
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    LaunchedEffect(selectedTab, state.tickers.size) {
+        if (selectedTab == 1) viewModel.loadCompositions()
+    }
 
     Scaffold(
         topBar = {
@@ -97,36 +110,66 @@ fun StockScreen(viewModel: StockViewModel = viewModel()) {
                 )
             )
         },
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    icon = { Icon(Icons.AutoMirrored.Filled.ShowChart, contentDescription = null) },
+                    label = { Text("Cours") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    icon = { Icon(Icons.Default.PieChart, contentDescription = null) },
+                    label = { Text("Composition") }
+                )
+            }
+        },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showSearchSheet = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Rechercher une valeur")
+            if (selectedTab == 0) {
+                FloatingActionButton(onClick = { showSearchSheet = true }) {
+                    Icon(Icons.Default.Add, contentDescription = "Rechercher une valeur")
+                }
             }
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
-        PullToRefreshBox(
-            isRefreshing = state.isRefreshing,
-            onRefresh = { viewModel.refreshNow() },
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+        if (selectedTab == 0) {
+            PullToRefreshBox(
+                isRefreshing = state.isRefreshing,
+                onRefresh = { viewModel.refreshNow() },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
             ) {
-                item(key = "portfolio-summary") {
-                    PortfolioSummaryCard(state.tickers)
-                }
-                items(state.tickers, key = { it.symbol }) { ticker ->
-                    TickerCard(
-                        ticker = ticker,
-                        onRemove = { viewModel.removeSymbol(ticker.symbol) },
-                        onEditHolding = { editingHolding = ticker }
-                    )
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    item(key = "portfolio-summary") {
+                        PortfolioSummaryCard(state.tickers)
+                    }
+                    items(state.tickers, key = { it.symbol }) { ticker ->
+                        TickerCard(
+                            ticker = ticker,
+                            onRemove = { viewModel.removeSymbol(ticker.symbol) },
+                            onEditHolding = { editingHolding = ticker }
+                        )
+                    }
                 }
             }
+        } else {
+            CompositionTab(
+                tickers = state.tickers,
+                compositions = compositions,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            )
         }
     }
 
@@ -422,28 +465,38 @@ private fun PositionSection(ticker: TickerUi, quote: Quote) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                StatItem(
+                    "Investi",
+                    formatOrDash(invested, currencySymbol),
+                    modifier = Modifier.weight(1f)
+                )
+                StatItem(
+                    "Valeur",
+                    formatOrDash(value, currencySymbol),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Spacer(Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                StatItem("Investi", formatOrDash(invested, currencySymbol))
-                StatItem("Valeur", formatOrDash(value, currencySymbol))
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = "Plus-value",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = String.format(Locale.FRANCE, "%+,.2f %s", gain, currencySymbol) +
-                            (gainPercent?.let {
-                                String.format(Locale.FRANCE, " (%+.2f %%)", it)
-                            } ?: ""),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = gainColor
-                    )
-                }
+                Text(
+                    text = "Plus-value",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = String.format(Locale.FRANCE, "%+,.2f %s", gain, currencySymbol) +
+                        (gainPercent?.let {
+                            String.format(Locale.FRANCE, " (%+.2f %%)", it)
+                        } ?: ""),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = gainColor
+                )
             }
         }
     }
@@ -502,29 +555,41 @@ private fun PortfolioSummaryCard(tickers: List<TickerUi>) {
                 Spacer(Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    StatItem(
-                        "Investi (sans plus-value)",
-                        formatOrDash(totals.invested, currencySymbol)
+                    Text(
+                        text = "Investi (sans plus-value)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            text = "Plus-value latente",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = String.format(
-                                Locale.FRANCE, "%+,.2f %s", gain, currencySymbol
-                            ) + (gainPercent?.let {
-                                String.format(Locale.FRANCE, " (%+.2f %%)", it)
-                            } ?: ""),
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = gainColor
-                        )
-                    }
+                    Text(
+                        text = formatOrDash(totals.invested, currencySymbol),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Plus-value latente",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = String.format(
+                            Locale.FRANCE, "%+,.2f %s", gain, currencySymbol
+                        ) + (gainPercent?.let {
+                            String.format(Locale.FRANCE, " (%+.2f %%)", it)
+                        } ?: ""),
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = gainColor
+                    )
                 }
             }
         }
@@ -673,8 +738,8 @@ private fun formatOrDash(value: Double, currencySymbol: String): String =
     if (value.isNaN()) "—" else String.format(Locale.FRANCE, "%,.2f %s", value, currencySymbol)
 
 @Composable
-private fun StatItem(label: String, value: String) {
-    Column {
+private fun StatItem(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,

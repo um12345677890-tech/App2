@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.stocktracker.app.data.Holding
 import com.stocktracker.app.data.Quote
 import com.stocktracker.app.data.SearchResult
+import com.stocktracker.app.data.SectorWeight
 import com.stocktracker.app.data.StockRepository
 import com.stocktracker.app.data.WatchlistStore
 import kotlinx.coroutines.Job
@@ -36,6 +37,14 @@ data class UiState(
     val isRefreshing: Boolean = false
 )
 
+/** Composition d'une position pour l'onglet dédié. */
+data class CompositionUi(
+    val isLoading: Boolean = true,
+    val error: String? = null,
+    val sectors: List<SectorWeight> = emptyList(),
+    val location: String? = null
+)
+
 /** État de la recherche mondiale de valeurs. */
 data class SearchState(
     val query: String = "",
@@ -61,7 +70,44 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     private val _searchState = MutableStateFlow(SearchState())
     val searchState: StateFlow<SearchState> = _searchState.asStateFlow()
 
+    private val _compositions = MutableStateFlow<Map<String, CompositionUi>>(emptyMap())
+    val compositions: StateFlow<Map<String, CompositionUi>> = _compositions.asStateFlow()
+
     private var searchJob: Job? = null
+
+    /**
+     * Charge la composition (secteurs + localisation) des valeurs suivies.
+     * Les compositions déjà chargées sont conservées ; les échecs sont retentés.
+     */
+    fun loadCompositions() {
+        _uiState.value.tickers.forEach { ticker ->
+            val existing = _compositions.value[ticker.symbol]
+            if (existing != null && (existing.isLoading || existing.error == null)) return@forEach
+            _compositions.update { it + (ticker.symbol to CompositionUi(isLoading = true)) }
+            viewModelScope.launch {
+                val name = _uiState.value.tickers
+                    .find { it.symbol == ticker.symbol }?.quote?.name ?: ticker.symbol
+                runCatching { repository.fetchComposition(ticker.symbol, name) }
+                    .onSuccess { composition ->
+                        _compositions.update {
+                            it + (ticker.symbol to CompositionUi(
+                                isLoading = false,
+                                sectors = composition.sectors,
+                                location = composition.location
+                            ))
+                        }
+                    }
+                    .onFailure { throwable ->
+                        _compositions.update {
+                            it + (ticker.symbol to CompositionUi(
+                                isLoading = false,
+                                error = throwable.message ?: "Composition indisponible"
+                            ))
+                        }
+                    }
+            }
+        }
+    }
 
     init {
         // Rafraîchissement automatique tant que le ViewModel est vivant.

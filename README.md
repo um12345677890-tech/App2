@@ -18,6 +18,9 @@ Markets UCITS ETF) sur Euronext Paris.
   et votre PRU (prix de revient unitaire) via le bouton ✏️ ; l'app affiche par ligne et
   en synthèse le **total investi (sans plus-value)**, la **valeur actuelle (avec
   plus-value)** et la **plus-value latente** en devise et en %
+- 🧭 **Onglet « Composition »** : répartition sectorielle (barres de pourcentage) et
+  localisation géographique de chaque position, via l'API Yahoo `quoteSummary`
+  (jeton « crumb » géré automatiquement)
 - 🌙 Thème sombre orienté finance
 
 ## Source des données
