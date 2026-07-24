@@ -6,8 +6,10 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
+import com.stocktracker.app.data.AlertStore
 import com.stocktracker.app.data.ChartData
 import com.stocktracker.app.data.Holding
+import com.stocktracker.app.data.PriceAlert
 import com.stocktracker.app.data.Quote
 import com.stocktracker.app.data.QuoteCache
 import com.stocktracker.app.data.SearchResult
@@ -82,6 +84,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = StockRepository(application)
     private val store = WatchlistStore(application)
     private val quoteCache = QuoteCache(application)
+    private val alertStore = AlertStore(application)
 
     // L'app est-elle au premier plan ? Pilote la boucle de rafraîchissement.
     private val foreground = MutableStateFlow(true)
@@ -121,6 +124,21 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _compositions = MutableStateFlow<Map<String, CompositionUi>>(emptyMap())
     val compositions: StateFlow<Map<String, CompositionUi>> = _compositions.asStateFlow()
+
+    private val _alerts = MutableStateFlow(alertStore.load().associateBy { it.symbol })
+    val alerts: StateFlow<Map<String, PriceAlert>> = _alerts.asStateFlow()
+
+    /** Enregistre (ou supprime, si aucun seuil) l'alerte de prix d'une valeur. */
+    fun setAlert(symbol: String, above: Double?, below: Double?) {
+        alertStore.set(
+            PriceAlert(
+                symbol = symbol,
+                above = above?.takeIf { it > 0.0 },
+                below = below?.takeIf { it > 0.0 }
+            )
+        )
+        _alerts.value = alertStore.load().associateBy { it.symbol }
+    }
 
     // Graphiques mis en cache par clé "SYMBOLE|période" le temps de la session.
     private val _charts = MutableStateFlow<Map<String, ChartUi>>(emptyMap())

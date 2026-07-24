@@ -1,7 +1,11 @@
 package com.stocktracker.app.ui
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -30,6 +34,8 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -82,6 +88,7 @@ import androidx.core.content.FileProvider
 import java.io.File
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.stocktracker.app.data.PriceAlert
 import com.stocktracker.app.data.Quote
 import com.stocktracker.app.data.SearchResult
 import com.stocktracker.app.ui.theme.Gain
@@ -97,10 +104,15 @@ fun StockScreen(viewModel: StockViewModel = viewModel()) {
     val searchState by viewModel.searchState.collectAsStateWithLifecycle()
     val compositions by viewModel.compositions.collectAsStateWithLifecycle()
     val charts by viewModel.charts.collectAsStateWithLifecycle()
+    val alerts by viewModel.alerts.collectAsStateWithLifecycle()
     var showSearchSheet by remember { mutableStateOf(false) }
     var editingHolding by remember { mutableStateOf<TickerUi?>(null) }
+    var editingAlert by remember { mutableStateOf<TickerUi?>(null) }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var detailSymbol by rememberSaveable { mutableStateOf<String?>(null) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     // Écran détail plein écran quand une valeur est sélectionnée.
@@ -257,8 +269,10 @@ fun StockScreen(viewModel: StockViewModel = viewModel()) {
                         TickerCard(
                             ticker = ticker,
                             portfolioShare = share,
+                            hasAlert = alerts[ticker.symbol]?.isActive == true,
                             onRemove = { viewModel.removeSymbol(ticker.symbol) },
                             onEditHolding = { editingHolding = ticker },
+                            onEditAlert = { editingAlert = ticker },
                             onOpenDetail = { detailSymbol = ticker.symbol }
                         )
                     }
@@ -283,6 +297,21 @@ fun StockScreen(viewModel: StockViewModel = viewModel()) {
                 editingHolding = null
             },
             onDismiss = { editingHolding = null }
+        )
+    }
+
+    editingAlert?.let { ticker ->
+        AlertEditDialog(
+            ticker = ticker,
+            existing = alerts[ticker.symbol],
+            onSave = { above, below ->
+                viewModel.setAlert(ticker.symbol, above, below)
+                if (Build.VERSION.SDK_INT >= 33 && (above != null || below != null)) {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+                editingAlert = null
+            },
+            onDismiss = { editingAlert = null }
         )
     }
 
@@ -459,8 +488,10 @@ private fun LiveStatusLine(lastUpdateMillis: Long?, isRefreshing: Boolean) {
 private fun TickerCard(
     ticker: TickerUi,
     portfolioShare: Double?,
+    hasAlert: Boolean,
     onRemove: () -> Unit,
     onEditHolding: () -> Unit,
+    onEditAlert: () -> Unit,
     onOpenDetail: () -> Unit
 ) {
     val quote = ticker.quote
@@ -496,6 +527,16 @@ private fun TickerCard(
                         }
                     }
                 }
+                IconButton(onClick = onEditAlert, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        if (hasAlert) Icons.Default.NotificationsActive
+                        else Icons.Default.NotificationsNone,
+                        contentDescription = "Alerte de prix sur ${ticker.symbol}",
+                        tint = if (hasAlert) Gain else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+                Spacer(Modifier.size(4.dp))
                 IconButton(onClick = onEditHolding, modifier = Modifier.size(28.dp)) {
                     Icon(
                         Icons.Default.Edit,
@@ -755,6 +796,67 @@ private fun exportPortfolioCsv(context: Context, tickers: List<TickerUi>) {
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
     context.startActivity(Intent.createChooser(intent, "Exporter le portefeuille"))
+}
+
+/** Saisie d'une alerte de prix : seuil haut et/ou seuil bas. */
+@Composable
+private fun AlertEditDialog(
+    ticker: TickerUi,
+    existing: PriceAlert?,
+    onSave: (above: Double?, below: Double?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    fun initial(value: Double?): String = value?.let {
+        String.format(Locale.ROOT, "%.4f", it).trimEnd('0').trimEnd('.')
+    } ?: ""
+
+    var aboveText by remember { mutableStateOf(initial(existing?.above)) }
+    var belowText by remember { mutableStateOf(initial(existing?.below)) }
+
+    fun parse(text: String): Double? =
+        text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it > 0.0 }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Alerte de prix — ${ticker.symbol}") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = aboveText,
+                    onValueChange = { aboveText = it },
+                    label = { Text("Me prévenir si le cours ≥") },
+                    placeholder = { Text("Ex. : 7,20") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = belowText,
+                    onValueChange = { belowText = it },
+                    label = { Text("Me prévenir si le cours ≤") },
+                    placeholder = { Text("Ex. : 6,20") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "Vérification environ toutes les 15 minutes, même app fermée. " +
+                        "Un seuil se désactive après son déclenchement. " +
+                        "Laissez les deux champs vides pour supprimer l'alerte.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(parse(aboveText), parse(belowText)) }) {
+                Text("Enregistrer")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Annuler") }
+        }
+    )
 }
 
 /** Saisie de la position : nombre de parts détenues et PRU. */

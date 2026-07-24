@@ -28,6 +28,18 @@ Markets UCITS ETF) sur Euronext Paris.
   automatiquement, endpoints non officiels), avec en secours la répartition de
   l'indice suivi embarquée (ex. MSCI World au 30/06/2026 : États-Unis 72,26 %,
   Japon 5,69 %…). La source réellement utilisée est affichée sous chaque graphique
+- 📈 **Écran détail** en touchant une valeur : graphique interactif par période
+  (1J, 5J, 1M, 6M, 1A, 5A, Max), performance de la période, plus haut/plus bas
+- 🔔 **Alertes de prix** : seuils haut/bas par valeur, vérifiés environ toutes les
+  15 minutes en arrière-plan (WorkManager), notification au franchissement puis
+  désactivation du seuil déclenché
+- ⚖️ **Poids de chaque position** en % du portefeuille, **tri** des cartes (ordre
+  d'ajout, valeur détenue, plus-value %, alphabétique) persisté
+- 📤 **Export CSV** du portefeuille (positions, PRU, valeurs, plus-values) via le
+  menu, partageable vers n'importe quelle app
+- ⚡ **Optimisations** : rafraîchissement uniquement quand l'app est visible
+  (batterie/données), démarrage instantané grâce au cache des dernières cotations,
+  cache HTTP disque de 5 Mo
 - 🌙 Thème sombre orienté finance
 
 ## Source des données
