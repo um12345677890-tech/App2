@@ -6,6 +6,7 @@ package com.stocktracker.app.data
 data class Quote(
     val symbol: String,
     val name: String,
+    val exchange: String,
     val currency: String,
     val price: Double,
     val previousClose: Double,

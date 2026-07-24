@@ -4,8 +4,10 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.stocktracker.app.data.Quote
+import com.stocktracker.app.data.SearchResult
 import com.stocktracker.app.data.StockRepository
 import com.stocktracker.app.data.WatchlistStore
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -31,6 +33,14 @@ data class UiState(
     val isRefreshing: Boolean = false
 )
 
+/** État de la recherche mondiale de valeurs. */
+data class SearchState(
+    val query: String = "",
+    val results: List<SearchResult> = emptyList(),
+    val isSearching: Boolean = false,
+    val error: String? = null
+)
+
 class StockViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = StockRepository()
@@ -40,6 +50,11 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         UiState(tickers = store.load().map { TickerUi(symbol = it) })
     )
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+    private val _searchState = MutableStateFlow(SearchState())
+    val searchState: StateFlow<SearchState> = _searchState.asStateFlow()
+
+    private var searchJob: Job? = null
 
     init {
         // Rafraîchissement automatique tant que le ViewModel est vivant.
@@ -65,6 +80,39 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(tickers = updated) }
         store.save(updated.map { it.symbol })
         refreshNow()
+    }
+
+    /** Recherche par nom ou symbole sur toutes les bourses (avec anti-rebond). */
+    fun onSearchQueryChange(query: String) {
+        _searchState.update { it.copy(query = query) }
+        searchJob?.cancel()
+        if (query.trim().length < 2) {
+            _searchState.update { it.copy(results = emptyList(), isSearching = false, error = null) }
+            return
+        }
+        searchJob = viewModelScope.launch {
+            delay(SEARCH_DEBOUNCE_MS)
+            _searchState.update { it.copy(isSearching = true) }
+            runCatching { repository.searchSymbols(query.trim()) }
+                .onSuccess { results ->
+                    _searchState.update {
+                        it.copy(results = results, isSearching = false, error = null)
+                    }
+                }
+                .onFailure { throwable ->
+                    _searchState.update {
+                        it.copy(
+                            isSearching = false,
+                            error = throwable.message ?: "Erreur réseau"
+                        )
+                    }
+                }
+        }
+    }
+
+    fun clearSearch() {
+        searchJob?.cancel()
+        _searchState.value = SearchState()
     }
 
     fun removeSymbol(symbol: String) {
@@ -115,5 +163,6 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         const val REFRESH_INTERVAL_MS = 15_000L
+        const val SEARCH_DEBOUNCE_MS = 350L
     }
 }

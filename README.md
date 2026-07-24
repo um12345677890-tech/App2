@@ -10,15 +10,26 @@ Markets UCITS ETF) sur Euronext Paris.
 - 💶 Cours actuel, variation du jour (absolue et %), clôture de la veille, plus haut / plus bas
 - 📊 Mini-graphique de la séance avec repère de la clôture de la veille
 - 🟢 Indicateur d'état du marché (ouvert / fermé / pré-ouverture / après-clôture)
-- ➕ Ajout d'autres valeurs par leur symbole Yahoo Finance (ex. `CW8.PA`, `ESE.PA`, `AAPL`),
-  liste sauvegardée localement
+- 🌍 **Recherche mondiale** : tapez un nom (« LVMH », « Apple », « MSCI World »…) ou un
+  symbole et ajoutez des valeurs de **toutes les bourses** (Euronext, NYSE, NASDAQ,
+  Londres, Francfort, Tokyo…) ; la liste est sauvegardée localement
+- 🏛️ Place de cotation et devise (€, $, £, ¥, pence…) affichées sur chaque carte
 - 🌙 Thème sombre orienté finance
 
 ## Source des données
 
-Les cotations proviennent de l'API publique de graphique **Yahoo Finance**
-(`query1.finance.yahoo.com/v8/finance/chart/…`), sans clé d'API. Les cours des ETF
-Euronext peuvent être légèrement différés selon Yahoo (généralement ~15 min pour Euronext).
+Les données proviennent de l'API publique **Yahoo Finance** :
+
+- cotations : `…/v8/finance/chart/SYMBOLE`
+- recherche mondiale : `…/v1/finance/search?q=…`
+
+Deux hôtes (`query1` et `query2.finance.yahoo.com`) sont utilisés en repli l'un de
+l'autre. Ce choix est délibéré : les API concurrentes (Alpha Vantage, Twelve Data,
+Marketstack, Finnhub…) exigent une clé d'API et ont des quotas gratuits très faibles
+(ex. 25 requêtes/jour chez Alpha Vantage), incompatibles avec un rafraîchissement
+toutes les 15 s, ou ne couvrent pas toutes les places mondiales. Yahoo Finance est la
+seule source gratuite, sans clé, couvrant l'ensemble des bourses. Les cours peuvent
+être légèrement différés selon la place (généralement ~15 min pour Euronext).
 
 ## Compiler
 

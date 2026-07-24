@@ -2,6 +2,7 @@ package com.stocktracker.app.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +12,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -18,24 +21,27 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.stocktracker.app.data.Quote
+import com.stocktracker.app.data.SearchResult
 import com.stocktracker.app.ui.theme.Gain
 import com.stocktracker.app.ui.theme.Loss
 import java.text.SimpleDateFormat
@@ -66,7 +73,9 @@ import java.util.Locale
 @Composable
 fun StockScreen(viewModel: StockViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    var showAddDialog by remember { mutableStateOf(false) }
+    val searchState by viewModel.searchState.collectAsStateWithLifecycle()
+    var showSearchSheet by remember { mutableStateOf(false) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     Scaffold(
         topBar = {
@@ -83,8 +92,8 @@ fun StockScreen(viewModel: StockViewModel = viewModel()) {
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showAddDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Ajouter une valeur")
+            FloatingActionButton(onClick = { showSearchSheet = true }) {
+                Icon(Icons.Default.Add, contentDescription = "Rechercher une valeur")
             }
         },
         containerColor = MaterialTheme.colorScheme.background
@@ -111,14 +120,153 @@ fun StockScreen(viewModel: StockViewModel = viewModel()) {
         }
     }
 
-    if (showAddDialog) {
-        AddSymbolDialog(
-            onConfirm = { symbol ->
-                viewModel.addSymbol(symbol)
-                showAddDialog = false
+    if (showSearchSheet) {
+        ModalBottomSheet(
+            onDismissRequest = {
+                showSearchSheet = false
+                viewModel.clearSearch()
             },
-            onDismiss = { showAddDialog = false }
+            sheetState = sheetState
+        ) {
+            SearchSheetContent(
+                searchState = searchState,
+                watchedSymbols = state.tickers.map { it.symbol }.toSet(),
+                onQueryChange = viewModel::onSearchQueryChange,
+                onAdd = viewModel::addSymbol
+            )
+        }
+    }
+}
+
+/** Recherche mondiale : nom ou symbole, toutes bourses confondues. */
+@Composable
+private fun SearchSheetContent(
+    searchState: SearchState,
+    watchedSymbols: Set<String>,
+    onQueryChange: (String) -> Unit,
+    onAdd: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .imePadding()
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 16.dp)
+    ) {
+        Text(
+            text = "Rechercher une valeur",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold
         )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "Toutes les bourses : Paris, NYSE, NASDAQ, Londres, Francfort, Tokyo…",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = searchState.query,
+            onValueChange = onQueryChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Nom ou symbole") },
+            placeholder = { Text("Ex. : LVMH, Apple, MSCI World…") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            singleLine = true
+        )
+        Spacer(Modifier.height(8.dp))
+
+        when {
+            searchState.isSearching -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                }
+            }
+            searchState.error != null -> {
+                Text(
+                    text = "Erreur : ${searchState.error}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(vertical = 16.dp)
+                )
+            }
+            searchState.results.isEmpty() && searchState.query.trim().length >= 2 -> {
+                Text(
+                    text = "Aucun résultat pour « ${searchState.query.trim()} »",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 16.dp)
+                )
+            }
+            else -> {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp)
+                ) {
+                    items(searchState.results, key = { it.symbol }) { result ->
+                        SearchResultRow(
+                            result = result,
+                            alreadyWatched = result.symbol in watchedSymbols,
+                            onAdd = { onAdd(result.symbol) }
+                        )
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchResultRow(
+    result: SearchResult,
+    alreadyWatched: Boolean,
+    onAdd: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = !alreadyWatched, onClick = onAdd)
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = result.name,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = listOf(result.symbol, result.exchange, result.type)
+                    .filter { it.isNotBlank() }
+                    .joinToString(" · "),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (alreadyWatched) {
+            Icon(
+                Icons.Default.CheckCircle,
+                contentDescription = "Déjà suivie",
+                tint = Gain
+            )
+        } else {
+            Icon(
+                Icons.Default.Add,
+                contentDescription = "Ajouter ${result.symbol}",
+                tint = MaterialTheme.colorScheme.primary
+            )
+        }
     }
 }
 
@@ -161,7 +309,10 @@ private fun TickerCard(ticker: TickerUi, onRemove: () -> Unit) {
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = ticker.symbol,
+                            text = listOfNotNull(
+                                ticker.symbol,
+                                quote?.exchange?.takeIf { it.isNotBlank() }
+                            ).joinToString(" · "),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -207,10 +358,22 @@ private fun TickerCard(ticker: TickerUi, onRemove: () -> Unit) {
     }
 }
 
+private fun currencySymbolOf(currency: String): String = when (currency.uppercase()) {
+    "EUR" -> "€"
+    "USD" -> "$"
+    "GBP" -> "£"
+    "GBP_PENCE", "GBX" -> "p"
+    "JPY" -> "¥"
+    "CHF" -> "CHF"
+    else -> currency
+}
+
 @Composable
 private fun QuoteContent(quote: Quote, staleError: String?) {
     val changeColor = if (quote.change >= 0) Gain else Loss
-    val currencySymbol = if (quote.currency == "EUR") "€" else quote.currency
+    // Yahoo renvoie "GBp" pour les cours en pence à Londres.
+    val currencySymbol =
+        if (quote.currency == "GBp") "p" else currencySymbolOf(quote.currency)
 
     Row(verticalAlignment = Alignment.Bottom) {
         Text(
@@ -360,39 +523,4 @@ private fun Sparkline(
             style = Stroke(width = 4f, cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
     }
-}
-
-@Composable
-private fun AddSymbolDialog(onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
-    var text by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Ajouter une valeur") },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    label = { Text("Symbole Yahoo Finance") },
-                    placeholder = { Text("Ex. : CW8.PA, ESE.PA, AAPL") },
-                    singleLine = true
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "Pour Euronext Paris, ajoutez le suffixe .PA",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onConfirm(text) },
-                enabled = text.isNotBlank()
-            ) { Text("Ajouter") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Annuler") }
-        }
-    )
 }
