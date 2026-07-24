@@ -3,6 +3,7 @@ package com.stocktracker.app.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.stocktracker.app.data.Holding
 import com.stocktracker.app.data.Quote
 import com.stocktracker.app.data.SearchResult
 import com.stocktracker.app.data.StockRepository
@@ -19,12 +20,14 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/** État d'affichage d'une valeur suivie. */
+/** État d'affichage d'une valeur suivie, avec la position détenue (quantité + PRU). */
 data class TickerUi(
     val symbol: String,
     val quote: Quote? = null,
     val error: String? = null,
-    val isLoading: Boolean = true
+    val isLoading: Boolean = true,
+    val quantity: Double = 0.0,
+    val pru: Double = 0.0
 )
 
 data class UiState(
@@ -47,7 +50,11 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     private val store = WatchlistStore(application)
 
     private val _uiState = MutableStateFlow(
-        UiState(tickers = store.load().map { TickerUi(symbol = it) })
+        UiState(
+            tickers = store.load().map {
+                TickerUi(symbol = it.symbol, quantity = it.quantity, pru = it.pru)
+            }
+        )
     )
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
@@ -78,8 +85,24 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
 
         val updated = current + TickerUi(symbol = symbol)
         _uiState.update { it.copy(tickers = updated) }
-        store.save(updated.map { it.symbol })
+        persist(updated)
         refreshNow()
+    }
+
+    /** Met à jour la position détenue (quantité de parts et PRU) d'une valeur. */
+    fun updateHolding(symbol: String, quantity: Double, pru: Double) {
+        val updated = _uiState.value.tickers.map { ticker ->
+            if (ticker.symbol == symbol) {
+                ticker.copy(
+                    quantity = quantity.coerceAtLeast(0.0),
+                    pru = pru.coerceAtLeast(0.0)
+                )
+            } else {
+                ticker
+            }
+        }
+        _uiState.update { it.copy(tickers = updated) }
+        persist(updated)
     }
 
     /** Recherche par nom ou symbole sur toutes les bourses (avec anti-rebond). */
@@ -118,7 +141,11 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     fun removeSymbol(symbol: String) {
         val updated = _uiState.value.tickers.filterNot { it.symbol == symbol }
         _uiState.update { it.copy(tickers = updated) }
-        store.save(updated.map { it.symbol })
+        persist(updated)
+    }
+
+    private fun persist(tickers: List<TickerUi>) {
+        store.save(tickers.map { Holding(it.symbol, it.quantity, it.pru) })
     }
 
     private suspend fun refreshAll() {

@@ -20,10 +20,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -38,6 +41,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -57,6 +61,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -75,6 +80,7 @@ fun StockScreen(viewModel: StockViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val searchState by viewModel.searchState.collectAsStateWithLifecycle()
     var showSearchSheet by remember { mutableStateOf(false) }
+    var editingHolding by remember { mutableStateOf<TickerUi?>(null) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     Scaffold(
@@ -110,14 +116,29 @@ fun StockScreen(viewModel: StockViewModel = viewModel()) {
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                item(key = "portfolio-summary") {
+                    PortfolioSummaryCard(state.tickers)
+                }
                 items(state.tickers, key = { it.symbol }) { ticker ->
                     TickerCard(
                         ticker = ticker,
-                        onRemove = { viewModel.removeSymbol(ticker.symbol) }
+                        onRemove = { viewModel.removeSymbol(ticker.symbol) },
+                        onEditHolding = { editingHolding = ticker }
                     )
                 }
             }
         }
+    }
+
+    editingHolding?.let { ticker ->
+        HoldingDialog(
+            ticker = ticker,
+            onSave = { quantity, pru ->
+                viewModel.updateHolding(ticker.symbol, quantity, pru)
+                editingHolding = null
+            },
+            onDismiss = { editingHolding = null }
+        )
     }
 
     if (showSearchSheet) {
@@ -290,7 +311,11 @@ private fun LiveStatusLine(lastUpdateMillis: Long?, isRefreshing: Boolean) {
 }
 
 @Composable
-private fun TickerCard(ticker: TickerUi, onRemove: () -> Unit) {
+private fun TickerCard(
+    ticker: TickerUi,
+    onRemove: () -> Unit,
+    onEditHolding: () -> Unit
+) {
     val quote = ticker.quote
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -322,6 +347,15 @@ private fun TickerCard(ticker: TickerUi, onRemove: () -> Unit) {
                         }
                     }
                 }
+                IconButton(onClick = onEditHolding, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        Icons.Default.Edit,
+                        contentDescription = "Saisir ma position sur ${ticker.symbol}",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+                Spacer(Modifier.size(4.dp))
                 IconButton(onClick = onRemove, modifier = Modifier.size(28.dp)) {
                     Icon(
                         Icons.Default.Close,
@@ -352,10 +386,217 @@ private fun TickerCard(ticker: TickerUi, onRemove: () -> Unit) {
                         color = MaterialTheme.colorScheme.error
                     )
                 }
-                else -> QuoteContent(quote, staleError = ticker.error)
+                else -> {
+                    QuoteContent(quote, staleError = ticker.error)
+                    if (ticker.quantity > 0.0) {
+                        Spacer(Modifier.height(12.dp))
+                        PositionSection(ticker = ticker, quote = quote)
+                    }
+                }
             }
         }
     }
+}
+
+/** Position détenue sur la valeur : quantité, PRU, investi, valeur et plus-value. */
+@Composable
+private fun PositionSection(ticker: TickerUi, quote: Quote) {
+    val currencySymbol =
+        if (quote.currency == "GBp") "p" else currencySymbolOf(quote.currency)
+    val invested = ticker.quantity * ticker.pru
+    val value = ticker.quantity * quote.price
+    val gain = value - invested
+    val gainPercent = if (invested > 0) gain / invested * 100.0 else null
+    val gainColor = if (gain >= 0) Gain else Loss
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = "Ma position — ${formatQuantity(ticker.quantity)} part(s) · " +
+                    "PRU ${formatOrDash(ticker.pru, currencySymbol)}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                StatItem("Investi", formatOrDash(invested, currencySymbol))
+                StatItem("Valeur", formatOrDash(value, currencySymbol))
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "Plus-value",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = String.format(Locale.FRANCE, "%+,.2f %s", gain, currencySymbol) +
+                            (gainPercent?.let {
+                                String.format(Locale.FRANCE, " (%+.2f %%)", it)
+                            } ?: ""),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = gainColor
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Synthèse du portefeuille : total investi (sans plus-value), valeur actuelle
+ * (avec plus-value) et plus-value latente, agrégés par devise.
+ */
+@Composable
+private fun PortfolioSummaryCard(tickers: List<TickerUi>) {
+    // Agrégats par devise (un portefeuille PEA sera 100 % en euros).
+    data class Totals(var invested: Double = 0.0, var value: Double = 0.0)
+
+    val totalsByCurrency = linkedMapOf<String, Totals>()
+    tickers.forEach { ticker ->
+        val quote = ticker.quote ?: return@forEach
+        if (ticker.quantity <= 0.0) return@forEach
+        val symbol = if (quote.currency == "GBp") "p" else currencySymbolOf(quote.currency)
+        val totals = totalsByCurrency.getOrPut(symbol) { Totals() }
+        totals.invested += ticker.quantity * ticker.pru
+        totals.value += ticker.quantity * quote.price
+    }
+    if (totalsByCurrency.isEmpty()) return
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Mon portefeuille",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            totalsByCurrency.forEach { (currencySymbol, totals) ->
+                val gain = totals.value - totals.invested
+                val gainPercent =
+                    if (totals.invested > 0) gain / totals.invested * 100.0 else null
+                val gainColor = if (gain >= 0) Gain else Loss
+
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = String.format(Locale.FRANCE, "%,.2f %s", totals.value, currencySymbol),
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Valeur actuelle (avec plus-value)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    StatItem(
+                        "Investi (sans plus-value)",
+                        formatOrDash(totals.invested, currencySymbol)
+                    )
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = "Plus-value latente",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = String.format(
+                                Locale.FRANCE, "%+,.2f %s", gain, currencySymbol
+                            ) + (gainPercent?.let {
+                                String.format(Locale.FRANCE, " (%+.2f %%)", it)
+                            } ?: ""),
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = gainColor
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun formatQuantity(quantity: Double): String =
+    if (quantity == quantity.toLong().toDouble()) {
+        quantity.toLong().toString()
+    } else {
+        String.format(Locale.FRANCE, "%.4f", quantity).trimEnd('0').trimEnd(',')
+    }
+
+/** Saisie de la position : nombre de parts détenues et PRU. */
+@Composable
+private fun HoldingDialog(
+    ticker: TickerUi,
+    onSave: (quantity: Double, pru: Double) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var quantityText by remember {
+        mutableStateOf(if (ticker.quantity > 0.0) formatQuantity(ticker.quantity) else "")
+    }
+    var pruText by remember {
+        mutableStateOf(
+            if (ticker.pru > 0.0) String.format(Locale.ROOT, "%.4f", ticker.pru)
+                .trimEnd('0').trimEnd('.') else ""
+        )
+    }
+
+    fun parse(text: String): Double =
+        text.trim().replace(',', '.').toDoubleOrNull() ?: 0.0
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Ma position — ${ticker.symbol}") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = quantityText,
+                    onValueChange = { quantityText = it },
+                    label = { Text("Nombre de parts") },
+                    placeholder = { Text("Ex. : 12") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = pruText,
+                    onValueChange = { pruText = it },
+                    label = { Text("PRU (prix de revient unitaire)") },
+                    placeholder = { Text("Ex. : 5,43") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "Mettez 0 part pour retirer la position du portefeuille.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(parse(quantityText), parse(pruText)) }) {
+                Text("Enregistrer")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Annuler") }
+        }
+    )
 }
 
 private fun currencySymbolOf(currency: String): String = when (currency.uppercase()) {

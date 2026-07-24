@@ -14,6 +14,10 @@ Markets UCITS ETF) sur Euronext Paris.
   symbole et ajoutez des valeurs de **toutes les bourses** (Euronext, NYSE, NASDAQ,
   Londres, Francfort, Tokyo…) ; la liste est sauvegardée localement
 - 🏛️ Place de cotation et devise (€, $, £, ¥, pence…) affichées sur chaque carte
+- 💼 **Portefeuille avec PRU** : saisissez pour chaque valeur le nombre de parts détenues
+  et votre PRU (prix de revient unitaire) via le bouton ✏️ ; l'app affiche par ligne et
+  en synthèse le **total investi (sans plus-value)**, la **valeur actuelle (avec
+  plus-value)** et la **plus-value latente** en devise et en %
 - 🌙 Thème sombre orienté finance
 
 ## Source des données
