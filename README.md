@@ -24,8 +24,10 @@ Markets UCITS ETF) sur Euronext Paris.
 - 🍩 **Allocation géographique** façon rapport de gestion : graphique en anneau et
   légende par pays pour chaque position et pour l'ensemble du portefeuille (pondérée
   par la valeur des positions). Pour les actions, le pays vient de Yahoo ; pour les
-  ETF, la répartition réelle de l'indice suivi est embarquée (ex. MSCI World au
-  30/06/2026 : États-Unis 72,26 %, Japon 5,69 %…), la source étant affichée
+  ETF, l'allocation réelle du fonds est lue sur sa fiche **justETF** (ISIN résolu
+  automatiquement, endpoints non officiels), avec en secours la répartition de
+  l'indice suivi embarquée (ex. MSCI World au 30/06/2026 : États-Unis 72,26 %,
+  Japon 5,69 %…). La source réellement utilisée est affichée sous chaque graphique
 - 🌙 Thème sombre orienté finance
 
 ## Source des données

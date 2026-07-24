@@ -91,19 +91,127 @@ class StockRepository {
     }
 
     /**
-     * Récupère la composition (secteurs + localisation) d'une position via l'API
-     * quoteSummary de Yahoo. Cette API exige un jeton « crumb » lié à un cookie :
-     * on le récupère automatiquement et on réessaie une fois s'il a expiré.
+     * Récupère la composition d'une position : secteurs via l'API quoteSummary de
+     * Yahoo (jeton « crumb » géré automatiquement), et allocation par pays réelle
+     * du fonds via justETF pour les ETF, avec la répartition d'indice embarquée
+     * en secours si justETF est indisponible.
      */
     suspend fun fetchComposition(symbol: String, name: String): Composition =
         withContext(Dispatchers.IO) {
-            try {
-                fetchCompositionOnce(symbol, name)
-            } catch (e: IOException) {
-                crumb = null
-                fetchCompositionOnce(symbol, name)
+            val base = runCatching {
+                try {
+                    fetchCompositionOnce(symbol, name)
+                } catch (e: IOException) {
+                    crumb = null
+                    fetchCompositionOnce(symbol, name)
+                }
+            }.getOrNull()
+
+            // justETF ne référence que des fonds : on ne tente rien pour une action
+            // (son pays vient déjà de Yahoo) ni si le nom n'évoque pas un ETF.
+            val looksLikeFund = name.uppercase().let {
+                "ETF" in it || "UCITS" in it || "INDEX" in it
+            }
+            val needsRealFundCountries = base == null || base.countriesSource == null ||
+                base.countriesSource.startsWith("indice")
+            val justEtfCountries = if (looksLikeFund && needsRealFundCountries) {
+                runCatching { fetchJustEtfCountries(symbol, name) }.getOrNull()
+            } else {
+                null
+            }
+
+            when {
+                base != null && justEtfCountries != null -> base.copy(
+                    countries = justEtfCountries,
+                    countriesSource = JUSTETF_SOURCE
+                )
+                base != null -> base
+                justEtfCountries != null -> Composition(
+                    sectors = emptyList(),
+                    countries = justEtfCountries,
+                    countriesSource = JUSTETF_SOURCE,
+                    location = regionFromName(name)
+                )
+                else -> throw IOException("Composition indisponible")
             }
         }
+
+    /** Cache symbole → ISIN résolu via la recherche justETF. */
+    private val isinCache = mutableMapOf<String, String>()
+
+    /**
+     * Allocation par pays réelle du fonds, lue sur sa fiche justETF (endpoints non
+     * officiels : tout échec renvoie null et le repli sur l'indice s'applique).
+     */
+    private fun fetchJustEtfCountries(symbol: String, name: String): List<SectorWeight>? {
+        val isin = resolveIsin(symbol, name) ?: return null
+        val html = getHtml("https://www.justetf.com/en/etf-profile.html?isin=$isin")
+        return parseJustEtfCountries(html).takeIf { it.size >= 2 }
+    }
+
+    private fun resolveIsin(symbol: String, name: String): String? {
+        isinCache[symbol]?.let { return it }
+        val queries = listOf(symbol.substringBefore('.'), name)
+        for (query in queries) {
+            val html = runCatching {
+                getHtml(
+                    "https://www.justetf.com/en/search.html?search=ETFS&query=" +
+                        URLEncoder.encode(query, "UTF-8")
+                )
+            }.getOrNull() ?: continue
+            val isin = Regex("isin=([A-Z]{2}[A-Z0-9]{10})").find(html)?.groupValues?.get(1)
+            if (isin != null) {
+                isinCache[symbol] = isin
+                return isin
+            }
+        }
+        return null
+    }
+
+    private fun parseJustEtfCountries(html: String): List<SectorWeight> {
+        val start = html.indexOf(">Countries<").takeIf { it >= 0 } ?: return emptyList()
+        val end = listOf(">Sectors<", ">Sector<")
+            .mapNotNull { marker -> html.indexOf(marker, start).takeIf { it > start } }
+            .minOrNull()
+            ?: (start + 12_000).coerceAtMost(html.length)
+        val segment = html.substring(start, end)
+
+        val rowRegex = Regex(
+            ">([A-Z][A-Za-z&.,'\\- ]{1,40})<[^%]{0,200}?>([0-9]{1,2}(?:[.,][0-9]{1,2})?)\\s*%<"
+        )
+        val countries = mutableListOf<SectorWeight>()
+        for (match in rowRegex.findAll(segment)) {
+            val rawLabel = match.groupValues[1].trim()
+            val percent = match.groupValues[2].replace(',', '.').toDoubleOrNull() ?: continue
+            if (percent <= 0.0 || percent > 100.0) continue
+            val label = if (rawLabel.equals("Other", true) || rawLabel.equals("Others", true)) {
+                "Autres"
+            } else {
+                countryLabel(rawLabel)
+            }
+            if (countries.none { it.label == label }) {
+                countries.add(SectorWeight(label, percent / 100.0))
+            }
+        }
+        // Sécurité anti-parsing aberrant : le total doit rester plausible.
+        val total = countries.sumOf { it.weight }
+        if (total < 0.3 || total > 1.1) return emptyList()
+        countries.sortByDescending { it.weight }
+        return countries
+    }
+
+    private fun getHtml(url: String): String {
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", "text/html")
+            .header("Accept-Language", "en")
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+            return response.body?.string() ?: throw IOException("Réponse vide")
+        }
+    }
 
     private fun fetchCompositionOnce(symbol: String, name: String): Composition {
         val crumbValue = obtainCrumb()
@@ -278,10 +386,30 @@ class StockRepository {
         "Ireland" -> "Irlande"
         "Luxembourg" -> "Luxembourg"
         "Canada" -> "Canada"
-        "South Korea" -> "Corée du Sud"
+        "South Korea", "Korea" -> "Corée du Sud"
         "Taiwan" -> "Taïwan"
         "India" -> "Inde"
         "Brazil" -> "Brésil"
+        "Sweden" -> "Suède"
+        "Denmark" -> "Danemark"
+        "Norway" -> "Norvège"
+        "Finland" -> "Finlande"
+        "Austria" -> "Autriche"
+        "Australia" -> "Australie"
+        "Singapore" -> "Singapour"
+        "Saudi Arabia" -> "Arabie saoudite"
+        "South Africa" -> "Afrique du Sud"
+        "Mexico" -> "Mexique"
+        "Indonesia" -> "Indonésie"
+        "Thailand" -> "Thaïlande"
+        "Poland" -> "Pologne"
+        "Greece" -> "Grèce"
+        "Turkey" -> "Turquie"
+        "United Arab Emirates" -> "Émirats arabes unis"
+        "Malaysia" -> "Malaisie"
+        "Chile" -> "Chili"
+        "New Zealand" -> "Nouvelle-Zélande"
+        "Israel" -> "Israël"
         else -> country
     }
 
@@ -411,5 +539,6 @@ class StockRepository {
     companion object {
         private const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
+        private const val JUSTETF_SOURCE = "justETF (répartition réelle du fonds)"
     }
 }
