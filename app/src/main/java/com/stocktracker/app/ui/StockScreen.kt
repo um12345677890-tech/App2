@@ -87,10 +87,24 @@ fun StockScreen(viewModel: StockViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val searchState by viewModel.searchState.collectAsStateWithLifecycle()
     val compositions by viewModel.compositions.collectAsStateWithLifecycle()
+    val charts by viewModel.charts.collectAsStateWithLifecycle()
     var showSearchSheet by remember { mutableStateOf(false) }
     var editingHolding by remember { mutableStateOf<TickerUi?>(null) }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    var detailSymbol by rememberSaveable { mutableStateOf<String?>(null) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    // Écran détail plein écran quand une valeur est sélectionnée.
+    val detailTicker = state.tickers.find { it.symbol == detailSymbol }
+    if (detailTicker != null) {
+        DetailScreen(
+            ticker = detailTicker,
+            charts = charts,
+            onLoadChart = viewModel::loadChart,
+            onBack = { detailSymbol = null }
+        )
+        return
+    }
 
     LaunchedEffect(selectedTab, state.tickers.size) {
         if (selectedTab == 1) viewModel.loadCompositions()
@@ -157,7 +171,8 @@ fun StockScreen(viewModel: StockViewModel = viewModel()) {
                         TickerCard(
                             ticker = ticker,
                             onRemove = { viewModel.removeSymbol(ticker.symbol) },
-                            onEditHolding = { editingHolding = ticker }
+                            onEditHolding = { editingHolding = ticker },
+                            onOpenDetail = { detailSymbol = ticker.symbol }
                         )
                     }
                 }
@@ -357,11 +372,14 @@ private fun LiveStatusLine(lastUpdateMillis: Long?, isRefreshing: Boolean) {
 private fun TickerCard(
     ticker: TickerUi,
     onRemove: () -> Unit,
-    onEditHolding: () -> Unit
+    onEditHolding: () -> Unit,
+    onOpenDetail: () -> Unit
 ) {
     val quote = ticker.quote
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpenDetail),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {

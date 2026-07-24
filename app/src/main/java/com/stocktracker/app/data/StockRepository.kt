@@ -23,6 +23,22 @@ data class SearchResult(
     val type: String
 )
 
+/** Point d'un graphique de cours. */
+data class ChartPoint(
+    val timeSeconds: Long,
+    val close: Float
+)
+
+/** Série de cours d'une valeur sur une période donnée. */
+data class ChartData(
+    val points: List<ChartPoint>,
+    val currency: String,
+    val periodHigh: Double,
+    val periodLow: Double,
+    val startPrice: Double,
+    val endPrice: Double
+)
+
 /** Poids d'un secteur dans une position (0.0 à 1.0). */
 data class SectorWeight(
     val label: String,
@@ -83,6 +99,50 @@ class StockRepository(context: Context) {
             "/v8/finance/chart/$encoded?interval=5m&range=1d&includePrePost=false"
         )
         parseQuote(symbol, body)
+    }
+
+    /** Série de cours d'une valeur pour une période (range/interval Yahoo). */
+    suspend fun fetchChart(symbol: String, range: String, interval: String): ChartData =
+        withContext(Dispatchers.IO) {
+            val encoded = URLEncoder.encode(symbol, "UTF-8")
+            val body = getWithFallback(
+                "/v8/finance/chart/$encoded?interval=$interval&range=$range&includePrePost=false"
+            )
+            parseChart(symbol, body)
+        }
+
+    private fun parseChart(symbol: String, body: String): ChartData {
+        val chart = JSONObject(body).getJSONObject("chart")
+        if (!chart.isNull("error")) {
+            val description = chart.getJSONObject("error").optString("description", "erreur inconnue")
+            throw IOException("Symbole $symbol : $description")
+        }
+        val result = chart.getJSONArray("result").getJSONObject(0)
+        val meta = result.getJSONObject("meta")
+        val timestamps = result.optJSONArray("timestamp")
+        val closes = result.optJSONObject("indicators")
+            ?.optJSONArray("quote")
+            ?.optJSONObject(0)
+            ?.optJSONArray("close")
+
+        val points = mutableListOf<ChartPoint>()
+        if (timestamps != null && closes != null) {
+            for (i in 0 until minOf(timestamps.length(), closes.length())) {
+                if (!closes.isNull(i)) {
+                    points.add(ChartPoint(timestamps.getLong(i), closes.getDouble(i).toFloat()))
+                }
+            }
+        }
+        if (points.size < 2) throw IOException("Pas assez de données pour $symbol")
+
+        return ChartData(
+            points = points,
+            currency = meta.optString("currency", "EUR"),
+            periodHigh = points.maxOf { it.close }.toDouble(),
+            periodLow = points.minOf { it.close }.toDouble(),
+            startPrice = points.first().close.toDouble(),
+            endPrice = meta.optDouble("regularMarketPrice", points.last().close.toDouble())
+        )
     }
 
     /** Recherche une valeur par nom ou symbole sur toutes les bourses. */

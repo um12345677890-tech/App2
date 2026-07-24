@@ -6,6 +6,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
+import com.stocktracker.app.data.ChartData
 import com.stocktracker.app.data.Holding
 import com.stocktracker.app.data.Quote
 import com.stocktracker.app.data.QuoteCache
@@ -50,6 +51,13 @@ data class CompositionUi(
     val countries: List<SectorWeight> = emptyList(),
     val countriesSource: String? = null,
     val location: String? = null
+)
+
+/** Graphique d'une valeur sur une période, pour l'écran détail. */
+data class ChartUi(
+    val isLoading: Boolean = true,
+    val error: String? = null,
+    val data: ChartData? = null
 )
 
 /** État de la recherche mondiale de valeurs. */
@@ -102,6 +110,32 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _compositions = MutableStateFlow<Map<String, CompositionUi>>(emptyMap())
     val compositions: StateFlow<Map<String, CompositionUi>> = _compositions.asStateFlow()
+
+    // Graphiques mis en cache par clé "SYMBOLE|période" le temps de la session.
+    private val _charts = MutableStateFlow<Map<String, ChartUi>>(emptyMap())
+    val charts: StateFlow<Map<String, ChartUi>> = _charts.asStateFlow()
+
+    /** Charge la série de cours d'une valeur pour une période, avec cache en mémoire. */
+    fun loadChart(symbol: String, periodLabel: String, range: String, interval: String) {
+        val key = "$symbol|$periodLabel"
+        val existing = _charts.value[key]
+        if (existing != null && (existing.isLoading || existing.data != null)) return
+        _charts.update { it + (key to ChartUi(isLoading = true)) }
+        viewModelScope.launch {
+            runCatching { repository.fetchChart(symbol, range, interval) }
+                .onSuccess { data ->
+                    _charts.update { it + (key to ChartUi(isLoading = false, data = data)) }
+                }
+                .onFailure { throwable ->
+                    _charts.update {
+                        it + (key to ChartUi(
+                            isLoading = false,
+                            error = throwable.message ?: "Erreur réseau"
+                        ))
+                    }
+                }
+        }
+    }
 
     private var searchJob: Job? = null
 
