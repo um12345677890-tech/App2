@@ -42,6 +42,8 @@ data class CompositionUi(
     val isLoading: Boolean = true,
     val error: String? = null,
     val sectors: List<SectorWeight> = emptyList(),
+    val countries: List<SectorWeight> = emptyList(),
+    val countriesSource: String? = null,
     val location: String? = null
 )
 
@@ -93,6 +95,8 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                             it + (ticker.symbol to CompositionUi(
                                 isLoading = false,
                                 sectors = composition.sectors,
+                                countries = composition.countries,
+                                countriesSource = composition.countriesSource,
                                 location = composition.location
                             ))
                         }

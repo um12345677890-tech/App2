@@ -21,6 +21,11 @@ Markets UCITS ETF) sur Euronext Paris.
 - 🧭 **Onglet « Composition »** : répartition sectorielle (barres de pourcentage) et
   localisation géographique de chaque position, via l'API Yahoo `quoteSummary`
   (jeton « crumb » géré automatiquement)
+- 🍩 **Allocation géographique** façon rapport de gestion : graphique en anneau et
+  légende par pays pour chaque position et pour l'ensemble du portefeuille (pondérée
+  par la valeur des positions). Pour les actions, le pays vient de Yahoo ; pour les
+  ETF, la répartition réelle de l'indice suivi est embarquée (ex. MSCI World au
+  30/06/2026 : États-Unis 72,26 %, Japon 5,69 %…), la source étant affichée
 - 🌙 Thème sombre orienté finance
 
 ## Source des données

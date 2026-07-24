@@ -29,6 +29,8 @@ data class SectorWeight(
 /** Composition d'une position : répartition sectorielle et localisation géographique. */
 data class Composition(
     val sectors: List<SectorWeight>,
+    val countries: List<SectorWeight>,
+    val countriesSource: String?,
     val location: String?
 )
 
@@ -165,6 +167,8 @@ class StockRepository {
             }
 
         var location: String? = null
+        val countries = mutableListOf<SectorWeight>()
+        var countriesSource: String? = null
         result.optJSONObject("assetProfile")?.let { profile ->
             // Cas d'une action : un seul secteur et un pays.
             if (sectors.isEmpty()) {
@@ -172,12 +176,76 @@ class StockRepository {
                 if (sector.isNotBlank()) sectors.add(SectorWeight(sectorLabel(sector), 1.0))
             }
             val country = profile.optString("country")
-            if (country.isNotBlank()) location = countryLabel(country)
+            if (country.isNotBlank()) {
+                location = countryLabel(country)
+                countries.add(SectorWeight(countryLabel(country), 1.0))
+                countriesSource = "pays de la société (Yahoo Finance)"
+            }
+        }
+        // Yahoo ne fournit pas l'allocation par pays des ETF : on utilise la
+        // répartition réelle publiée pour l'indice suivi, déduit du nom du fonds.
+        if (countries.isEmpty()) {
+            indexAllocation(name)?.let { (allocation, source) ->
+                countries.addAll(allocation)
+                countriesSource = source
+            }
         }
         if (location == null) location = regionFromName(name)
 
         sectors.sortByDescending { it.weight }
-        return Composition(sectors = sectors, location = location)
+        return Composition(
+            sectors = sectors,
+            countries = countries,
+            countriesSource = countriesSource,
+            location = location
+        )
+    }
+
+    /**
+     * Allocation géographique réelle des grands indices suivis par les ETF,
+     * issue des rapports officiels (factsheets). Les poids sont en fractions.
+     */
+    private fun indexAllocation(name: String): Pair<List<SectorWeight>, String>? {
+        val upper = name.uppercase()
+        fun weights(vararg pairs: Pair<String, Double>) =
+            pairs.map { SectorWeight(it.first, it.second / 100.0) }
+        return when {
+            "EMERGING" in upper || "EMERGENT" in upper || "ÉMERGENT" in upper -> weights(
+                "Chine" to 27.5, "Taïwan" to 20.5, "Inde" to 16.5, "Corée du Sud" to 10.5,
+                "Brésil" to 4.5, "Arabie saoudite" to 3.5, "Afrique du Sud" to 3.0,
+                "Mexique" to 2.0, "Indonésie" to 1.5, "Autres" to 10.5
+            ) to "indice MSCI Emerging Markets (répartition indicative fin 2025)"
+            "ACWI" in upper -> weights(
+                "États-Unis" to 64.0, "Japon" to 5.1, "Chine" to 3.2, "Royaume-Uni" to 3.0,
+                "Canada" to 2.9, "Taïwan" to 2.4, "Suisse" to 2.2, "France" to 2.1,
+                "Inde" to 1.9, "Autres" to 13.2
+            ) to "indice MSCI ACWI (répartition indicative fin 2025)"
+            "WORLD" in upper || "MONDE" in upper -> weights(
+                "États-Unis" to 72.26, "Japon" to 5.69, "Canada" to 3.35,
+                "Royaume-Uni" to 3.32, "Suisse" to 2.63, "France" to 2.14,
+                "Allemagne" to 2.11, "Pays-Bas" to 1.67, "Australie" to 1.59,
+                "Espagne" to 0.93, "Autres" to 4.31
+            ) to "indice MSCI World au 30/06/2026"
+            "S&P 500" in upper || "S&P500" in upper || "SP500" in upper ||
+                "NASDAQ" in upper || "RUSSELL" in upper || "USA" in upper ||
+                "UNITED STATES" in upper -> weights("États-Unis" to 100.0) to
+                "indice investi à 100 % aux États-Unis"
+            "EURO STOXX 50" in upper || "EUROSTOXX" in upper -> weights(
+                "France" to 36.0, "Allemagne" to 26.0, "Pays-Bas" to 15.0,
+                "Italie" to 8.0, "Espagne" to 8.0, "Autres" to 7.0
+            ) to "indice Euro Stoxx 50 (répartition indicative fin 2025)"
+            "STOXX" in upper || "EUROPE" in upper -> weights(
+                "Royaume-Uni" to 22.0, "France" to 16.0, "Suisse" to 14.0,
+                "Allemagne" to 13.0, "Pays-Bas" to 6.0, "Suède" to 5.0,
+                "Italie" to 4.0, "Espagne" to 4.0, "Danemark" to 4.0, "Autres" to 12.0
+            ) to "indice Stoxx Europe 600 (répartition indicative fin 2025)"
+            "CAC 40" in upper || "CAC40" in upper || "FRANCE" in upper ->
+                weights("France" to 100.0) to "indice investi à 100 % en France"
+            "JAPAN" in upper || "JAPON" in upper || "NIKKEI" in upper ||
+                "TOPIX" in upper -> weights("Japon" to 100.0) to
+                "indice investi à 100 % au Japon"
+            else -> null
+        }
     }
 
     private fun sectorLabel(key: String): String = when (key.lowercase().replace(" ", "_")) {

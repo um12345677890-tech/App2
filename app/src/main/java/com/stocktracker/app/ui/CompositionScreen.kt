@@ -1,5 +1,6 @@
 package com.stocktracker.app.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -25,13 +27,32 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.stocktracker.app.data.SectorWeight
 import java.util.Locale
 
+/** Dégradé de bleus façon rapport de gestion, du plus foncé au plus clair. */
+private val DonutPalette = listOf(
+    Color(0xFF2E4A7A), Color(0xFF3A5CA0), Color(0xFF4A6FC4), Color(0xFF5F86DB),
+    Color(0xFF77A0E8), Color(0xFF92B8F0), Color(0xFFADCCF5), Color(0xFFC6DDF9),
+    Color(0xFFDDEDFC), Color(0xFFEFF8FE)
+)
+private val OtherColor = Color(0xFF8A93A6)
+
+private fun colorFor(index: Int, label: String): Color =
+    if (label == "Autres") OtherColor
+    else DonutPalette[index % DonutPalette.size]
+
 /**
- * Onglet « Composition » : répartition sectorielle et localisation de chaque position.
+ * Onglet « Composition » : allocation géographique (portefeuille puis chaque
+ * position) et répartition sectorielle de chaque position.
  */
 @Composable
 fun CompositionTab(
@@ -39,11 +60,41 @@ fun CompositionTab(
     compositions: Map<String, CompositionUi>,
     modifier: Modifier = Modifier
 ) {
+    val portfolioCountries = aggregatePortfolioCountries(tickers, compositions)
+
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        if (portfolioCountries.isNotEmpty()) {
+            item(key = "portfolio-geo") {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Allocation géographique du portefeuille",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        DonutWithLegend(entries = portfolioCountries)
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "Pondérée par la valeur de chaque position détenue.",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontStyle = FontStyle.Italic,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
         items(tickers, key = { it.symbol }) { ticker ->
             CompositionCard(
                 ticker = ticker,
@@ -51,6 +102,41 @@ fun CompositionTab(
             )
         }
     }
+}
+
+/**
+ * Agrège l'allocation par pays de toutes les positions détenues, pondérée par
+ * leur valeur de marché, puis normalisée sur les positions dont la composition
+ * est connue.
+ */
+private fun aggregatePortfolioCountries(
+    tickers: List<TickerUi>,
+    compositions: Map<String, CompositionUi>
+): List<SectorWeight> {
+    val positions = tickers.filter { it.quantity > 0.0 && it.quote != null }
+    val totalValue = positions.sumOf { it.quantity * it.quote!!.price }
+    if (totalValue <= 0.0) return emptyList()
+
+    val totals = linkedMapOf<String, Double>()
+    var coveredShare = 0.0
+    positions.forEach { ticker ->
+        val composition = compositions[ticker.symbol] ?: return@forEach
+        if (composition.countries.isEmpty()) return@forEach
+        val share = ticker.quantity * ticker.quote!!.price / totalValue
+        coveredShare += share
+        val sum = composition.countries.sumOf { it.weight }.takeIf { it > 0.0 } ?: 1.0
+        composition.countries.forEach { country ->
+            totals[country.label] =
+                (totals[country.label] ?: 0.0) + share * (country.weight / sum)
+        }
+    }
+    if (coveredShare <= 0.0) return emptyList()
+
+    val (others, named) = totals
+        .map { SectorWeight(it.key, it.value / coveredShare) }
+        .sortedByDescending { it.weight }
+        .partition { it.label == "Autres" }
+    return named + others
 }
 
 @Composable
@@ -101,6 +187,26 @@ private fun CompositionCard(ticker: TickerUi, composition: CompositionUi?) {
                         fontWeight = FontWeight.Medium
                     )
 
+                    if (composition.countries.size >= 2) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = "Allocation géographique",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        DonutWithLegend(entries = composition.countries)
+                        composition.countriesSource?.let { source ->
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = "Source : $source",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontStyle = FontStyle.Italic,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
                     if (composition.sectors.isNotEmpty()) {
                         Spacer(Modifier.height(12.dp))
                         Text(
@@ -110,10 +216,7 @@ private fun CompositionCard(ticker: TickerUi, composition: CompositionUi?) {
                         )
                         Spacer(Modifier.height(8.dp))
                         composition.sectors.forEach { sector ->
-                            SectorBar(
-                                label = sector.label,
-                                weight = sector.weight
-                            )
+                            SectorBar(label = sector.label, weight = sector.weight)
                             Spacer(Modifier.height(6.dp))
                         }
                     } else {
@@ -127,6 +230,102 @@ private fun CompositionCard(ticker: TickerUi, composition: CompositionUi?) {
                 }
             }
         }
+    }
+}
+
+/** Anneau façon rapport de gestion, suivi d'une légende à deux colonnes. */
+@Composable
+private fun DonutWithLegend(entries: List<SectorWeight>) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.Center
+        ) {
+            DonutChart(
+                entries = entries,
+                modifier = Modifier.size(170.dp)
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        entries.chunked(2).forEach { rowEntries ->
+            Row(modifier = Modifier.fillMaxWidth()) {
+                rowEntries.forEach { entry ->
+                    val index = entries.indexOf(entry)
+                    LegendItem(
+                        color = colorFor(index, entry.label),
+                        label = entry.label,
+                        weight = entry.weight,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                if (rowEntries.size == 1) Spacer(Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(6.dp))
+        }
+    }
+}
+
+@Composable
+private fun DonutChart(entries: List<SectorWeight>, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val strokeWidth = size.minDimension * 0.22f
+        val diameter = size.minDimension - strokeWidth
+        val topLeft = Offset(
+            (size.width - diameter) / 2f,
+            (size.height - diameter) / 2f
+        )
+        val arcSize = Size(diameter, diameter)
+        val total = entries.sumOf { it.weight }.toFloat().takeIf { it > 0f } ?: 1f
+
+        var startAngle = -90f
+        entries.forEachIndexed { index, entry ->
+            val sweep = entry.weight.toFloat() / total * 360f
+            val gap = minOf(1.2f, sweep * 0.15f)
+            drawArc(
+                color = colorFor(index, entry.label),
+                startAngle = startAngle + gap / 2f,
+                sweepAngle = (sweep - gap).coerceAtLeast(0.5f),
+                useCenter = false,
+                topLeft = topLeft,
+                size = arcSize,
+                style = Stroke(width = strokeWidth)
+            )
+            startAngle += sweep
+        }
+    }
+}
+
+@Composable
+private fun LegendItem(
+    color: Color,
+    label: String,
+    weight: Double,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(12.dp)
+                .clip(CircleShape)
+                .background(color)
+        )
+        Spacer(Modifier.size(6.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = String.format(Locale.FRANCE, "%.2f %%", weight * 100),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium
+        )
+        Spacer(Modifier.size(8.dp))
     }
 }
 
