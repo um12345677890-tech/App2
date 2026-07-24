@@ -8,16 +8,35 @@ android {
     namespace = "com.stocktracker.app"
     compileSdk = 35
 
+    // Numéro de version = numéro du run CI (incrémenté à chaque build GitHub
+    // Actions) pour qu'Android reconnaisse chaque APK comme une mise à jour.
+    val ciVersionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toIntOrNull() ?: 1
+
     defaultConfig {
         applicationId = "com.stocktracker.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = ciVersionCode
+        versionName = "1.0.$ciVersionCode"
+    }
+
+    // Clé de signature fixe commitée dans le dépôt : tous les APK partagent la
+    // même signature, donc les mises à jour s'installent SANS désinstaller.
+    signingConfigs {
+        create("shared") {
+            storeFile = file("keystore.jks")
+            storePassword = "stocktracker"
+            keyAlias = "stocktracker"
+            keyPassword = "stocktracker"
+        }
     }
 
     buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("shared")
+        }
         release {
+            signingConfig = signingConfigs.getByName("shared")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
