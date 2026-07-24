@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Courbe boursière ascendante -->
+    <path
+        android:pathData="M28,70 L42,56 L52,63 L68,44 L80,38"
+        android:strokeColor="#4CC9F0"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M80,38 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0"
+        android:fillColor="#80FFDB" />
+</vector>
