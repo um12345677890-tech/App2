@@ -1,13 +1,16 @@
 package com.stocktracker.app.data
 
+import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.Cache
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
+import java.io.File
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
@@ -41,12 +44,13 @@ data class Composition(
  *  - recherche : /v1/finance/search?q=…
  * Deux hôtes (query1 et query2) sont essayés pour la résilience.
  */
-class StockRepository {
+class StockRepository(context: Context) {
 
     // Cookies Yahoo conservés en mémoire : nécessaires pour l'API quoteSummary (jeton crumb).
     private val cookieStore = mutableListOf<Cookie>()
 
     private val client = OkHttpClient.Builder()
+        .cache(Cache(File(context.cacheDir, "http_cache"), 5L * 1024 * 1024))
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .cookieJar(object : CookieJar {

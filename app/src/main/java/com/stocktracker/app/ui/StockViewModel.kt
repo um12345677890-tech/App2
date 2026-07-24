@@ -2,14 +2,19 @@ package com.stocktracker.app.ui
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import com.stocktracker.app.data.Holding
 import com.stocktracker.app.data.Quote
+import com.stocktracker.app.data.QuoteCache
 import com.stocktracker.app.data.SearchResult
 import com.stocktracker.app.data.SectorWeight
 import com.stocktracker.app.data.StockRepository
 import com.stocktracker.app.data.WatchlistStore
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -57,15 +62,38 @@ data class SearchState(
 
 class StockViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val repository = StockRepository()
+    private val repository = StockRepository(application)
     private val store = WatchlistStore(application)
+    private val quoteCache = QuoteCache(application)
+
+    // L'app est-elle au premier plan ? Pilote la boucle de rafraîchissement.
+    private val foreground = MutableStateFlow(true)
+    private val lifecycleObserver = object : DefaultLifecycleObserver {
+        override fun onStart(owner: LifecycleOwner) {
+            foreground.value = true
+        }
+
+        override fun onStop(owner: LifecycleOwner) {
+            foreground.value = false
+        }
+    }
 
     private val _uiState = MutableStateFlow(
-        UiState(
-            tickers = store.load().map {
-                TickerUi(symbol = it.symbol, quantity = it.quantity, pru = it.pru)
-            }
-        )
+        run {
+            // Démarrage instantané : on pré-remplit avec les dernières cotations connues.
+            val (cachedQuotes, cachedAt) = quoteCache.load()
+            UiState(
+                tickers = store.load().map {
+                    TickerUi(
+                        symbol = it.symbol,
+                        quantity = it.quantity,
+                        pru = it.pru,
+                        quote = cachedQuotes[it.symbol]
+                    )
+                },
+                lastUpdateMillis = cachedAt
+            )
+        }
     )
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
@@ -114,13 +142,21 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     init {
-        // Rafraîchissement automatique tant que le ViewModel est vivant.
+        ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
+        // Rafraîchissement automatique, uniquement quand l'app est au premier plan
+        // (économie de batterie et de données) ; rattrapage immédiat au retour.
         viewModelScope.launch {
             while (isActive) {
+                foreground.first { it }
                 refreshAll()
                 delay(REFRESH_INTERVAL_MS)
             }
         }
+    }
+
+    override fun onCleared() {
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
+        super.onCleared()
     }
 
     fun refreshNow() {
@@ -236,6 +272,10 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                 isRefreshing = false
             )
         }
+        quoteCache.save(
+            _uiState.value.tickers.mapNotNull { it.quote },
+            _uiState.value.lastUpdateMillis ?: System.currentTimeMillis()
+        )
     }
 
     companion object {

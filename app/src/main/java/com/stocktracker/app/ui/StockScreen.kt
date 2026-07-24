@@ -444,8 +444,7 @@ private fun TickerCard(
 /** Position détenue sur la valeur : quantité, PRU, investi, valeur et plus-value. */
 @Composable
 private fun PositionSection(ticker: TickerUi, quote: Quote) {
-    val currencySymbol =
-        if (quote.currency == "GBp") "p" else currencySymbolOf(quote.currency)
+    val currencySymbol = currencySymbolOf(quote.currency)
     val invested = ticker.quantity * ticker.pru
     val value = ticker.quantity * quote.price
     val gain = value - invested
@@ -508,17 +507,18 @@ private fun PositionSection(ticker: TickerUi, quote: Quote) {
  */
 @Composable
 private fun PortfolioSummaryCard(tickers: List<TickerUi>) {
-    // Agrégats par devise (un portefeuille PEA sera 100 % en euros).
-    data class Totals(var invested: Double = 0.0, var value: Double = 0.0)
-
-    val totalsByCurrency = linkedMapOf<String, Totals>()
-    tickers.forEach { ticker ->
-        val quote = ticker.quote ?: return@forEach
-        if (ticker.quantity <= 0.0) return@forEach
-        val symbol = if (quote.currency == "GBp") "p" else currencySymbolOf(quote.currency)
-        val totals = totalsByCurrency.getOrPut(symbol) { Totals() }
-        totals.invested += ticker.quantity * ticker.pru
-        totals.value += ticker.quantity * quote.price
+    // Agrégats par devise (un portefeuille PEA sera 100 % en euros) : (investi, valeur).
+    val totalsByCurrency = remember(tickers) {
+        val totals = linkedMapOf<String, Pair<Double, Double>>()
+        tickers.forEach { ticker ->
+            val quote = ticker.quote ?: return@forEach
+            if (ticker.quantity <= 0.0) return@forEach
+            val symbol = currencySymbolOf(quote.currency)
+            val (invested, value) = totals[symbol] ?: (0.0 to 0.0)
+            totals[symbol] = (invested + ticker.quantity * ticker.pru) to
+                (value + ticker.quantity * quote.price)
+        }
+        totals
     }
     if (totalsByCurrency.isEmpty()) return
 
@@ -536,14 +536,15 @@ private fun PortfolioSummaryCard(tickers: List<TickerUi>) {
                 fontWeight = FontWeight.Bold
             )
             totalsByCurrency.forEach { (currencySymbol, totals) ->
-                val gain = totals.value - totals.invested
+                val (invested, totalValue) = totals
+                val gain = totalValue - invested
                 val gainPercent =
-                    if (totals.invested > 0) gain / totals.invested * 100.0 else null
+                    if (invested > 0) gain / invested * 100.0 else null
                 val gainColor = if (gain >= 0) Gain else Loss
 
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    text = String.format(Locale.FRANCE, "%,.2f %s", totals.value, currencySymbol),
+                    text = formatMoney(totalValue, currencySymbol),
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -564,7 +565,7 @@ private fun PortfolioSummaryCard(tickers: List<TickerUi>) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = formatOrDash(totals.invested, currencySymbol),
+                        text = formatOrDash(invested, currencySymbol),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium
                     )
@@ -595,13 +596,6 @@ private fun PortfolioSummaryCard(tickers: List<TickerUi>) {
         }
     }
 }
-
-private fun formatQuantity(quantity: Double): String =
-    if (quantity == quantity.toLong().toDouble()) {
-        quantity.toLong().toString()
-    } else {
-        String.format(Locale.FRANCE, "%.4f", quantity).trimEnd('0').trimEnd(',')
-    }
 
 /** Saisie de la position : nombre de parts détenues et PRU. */
 @Composable
@@ -664,22 +658,10 @@ private fun HoldingDialog(
     )
 }
 
-private fun currencySymbolOf(currency: String): String = when (currency.uppercase()) {
-    "EUR" -> "€"
-    "USD" -> "$"
-    "GBP" -> "£"
-    "GBP_PENCE", "GBX" -> "p"
-    "JPY" -> "¥"
-    "CHF" -> "CHF"
-    else -> currency
-}
-
 @Composable
 private fun QuoteContent(quote: Quote, staleError: String?) {
     val changeColor = if (quote.change >= 0) Gain else Loss
-    // Yahoo renvoie "GBp" pour les cours en pence à Londres.
-    val currencySymbol =
-        if (quote.currency == "GBp") "p" else currencySymbolOf(quote.currency)
+    val currencySymbol = currencySymbolOf(quote.currency)
 
     Row(verticalAlignment = Alignment.Bottom) {
         Text(
@@ -733,9 +715,6 @@ private fun QuoteContent(quote: Quote, staleError: String?) {
         )
     }
 }
-
-private fun formatOrDash(value: Double, currencySymbol: String): String =
-    if (value.isNaN()) "—" else String.format(Locale.FRANCE, "%,.2f %s", value, currencySymbol)
 
 @Composable
 private fun StatItem(label: String, value: String, modifier: Modifier = Modifier) {
