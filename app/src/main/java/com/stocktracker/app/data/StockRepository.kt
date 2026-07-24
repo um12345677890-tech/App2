@@ -4,8 +4,10 @@ import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Cache
+import okhttp3.CacheControl
 import okhttp3.Cookie
 import okhttp3.CookieJar
+import okhttp3.FormBody
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -171,29 +173,30 @@ class StockRepository(context: Context) {
                 }
             }.getOrNull()
 
-            // justETF ne référence que des fonds : on ne tente rien pour une action
-            // (son pays vient déjà de Yahoo) ni si le nom n'évoque pas un ETF.
+            // Priorité des sources : pays Yahoo pour les actions et répartition
+            // d'indice embarquée (exacte, issue des factsheets) pour les ETF
+            // reconnus. justETF n'est tenté que pour les ETF dont l'indice n'est
+            // pas reconnu, avec correspondance stricte du fonds.
             val looksLikeFund = name.uppercase().let {
                 "ETF" in it || "UCITS" in it || "INDEX" in it
             }
-            val needsRealFundCountries = base == null || base.countriesSource == null ||
-                base.countriesSource.startsWith("indice")
-            val justEtfCountries = if (looksLikeFund && needsRealFundCountries) {
+            val justEtf = if (looksLikeFund && (base == null || base.countries.isEmpty())) {
                 runCatching { fetchJustEtfCountries(symbol, name) }.getOrNull()
             } else {
                 null
             }
 
             when {
-                base != null && justEtfCountries != null -> base.copy(
-                    countries = justEtfCountries,
-                    countriesSource = JUSTETF_SOURCE
+                base != null && base.countries.isNotEmpty() -> base
+                base != null && justEtf != null -> base.copy(
+                    countries = justEtf.first,
+                    countriesSource = justEtf.second
                 )
                 base != null -> base
-                justEtfCountries != null -> Composition(
+                justEtf != null -> Composition(
                     sectors = emptyList(),
-                    countries = justEtfCountries,
-                    countriesSource = JUSTETF_SOURCE,
+                    countries = justEtf.first,
+                    countriesSource = justEtf.second,
                     location = regionFromName(name)
                 )
                 else -> throw IOException("Composition indisponible")
@@ -203,34 +206,106 @@ class StockRepository(context: Context) {
     /** Cache symbole → ISIN résolu via la recherche justETF. */
     private val isinCache = mutableMapOf<String, String>()
 
+    /** ISIN connus de secours si la recherche justETF est indisponible. */
+    private val knownIsins = mapOf(
+        "WPEA.PA" to "IE0002XZSHO1",
+        "PAEEM.PA" to "FR0013412020",
+        "CW8.PA" to "LU1681043599"
+    )
+
     /**
      * Allocation par pays réelle du fonds, lue sur sa fiche justETF (endpoints non
      * officiels : tout échec renvoie null et le repli sur l'indice s'applique).
+     * Retourne les pays et le libellé de source incluant l'ISIN utilisé.
      */
-    private fun fetchJustEtfCountries(symbol: String, name: String): List<SectorWeight>? {
+    private fun fetchJustEtfCountries(
+        symbol: String,
+        name: String
+    ): Pair<List<SectorWeight>, String>? {
         val isin = resolveIsin(symbol, name) ?: return null
         val html = getHtml("https://www.justetf.com/en/etf-profile.html?isin=$isin")
-        return parseJustEtfCountries(html).takeIf { it.size >= 2 }
+
+        // Sécurité anti-mauvais fonds : la fiche doit mentionner le ticker ou
+        // au moins deux mots significatifs du nom du fonds.
+        val ticker = symbol.substringBefore('.')
+        val pageMatchesFund = html.contains(ticker, ignoreCase = true) ||
+            significantWords(name).count { html.contains(it, ignoreCase = true) } >= 2
+        if (!pageMatchesFund) return null
+
+        val countries = parseJustEtfCountries(html)
+        return countries.takeIf { it.size >= 2 }?.let { it to "justETF · ISIN $isin" }
     }
 
     private fun resolveIsin(symbol: String, name: String): String? {
         isinCache[symbol]?.let { return it }
-        val queries = listOf(symbol.substringBefore('.'), name)
-        for (query in queries) {
-            val html = runCatching {
-                getHtml(
-                    "https://www.justetf.com/en/search.html?search=ETFS&query=" +
-                        URLEncoder.encode(query, "UTF-8")
-                )
-            }.getOrNull() ?: continue
-            val isin = Regex("isin=([A-Z]{2}[A-Z0-9]{10})").find(html)?.groupValues?.get(1)
-            if (isin != null) {
-                isinCache[symbol] = isin
-                return isin
-            }
-        }
-        return null
+        val ticker = symbol.substringBefore('.')
+        val isin = runCatching { searchIsinViaJustEtf(ticker, name) }.getOrNull()
+            ?: knownIsins[symbol]
+        if (isin != null) isinCache[symbol] = isin
+        return isin
     }
+
+    /**
+     * Recherche l'ISIN via l'endpoint JSON non documenté de justETF
+     * (/servlet/etfs-search). Une ligne n'est retenue que si son ticker est
+     * exactement celui recherché, ou si une seule ligne correspond au nom.
+     */
+    private fun searchIsinViaJustEtf(ticker: String, name: String): String? {
+        val form = FormBody.Builder()
+            .add("draw", "1")
+            .add("start", "0")
+            .add("length", "25")
+            .add("search", "ETFS")
+            .add("query", ticker)
+            .add("lang", "en")
+            .add("country", "FR")
+            .add("universeType", "private")
+            .build()
+        val request = Request.Builder()
+            .url("https://www.justetf.com/servlet/etfs-search")
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", "application/json")
+            .header("X-Requested-With", "XMLHttpRequest")
+            .cacheControl(CacheControl.FORCE_NETWORK)
+            .post(form)
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+            val body = response.body?.string() ?: return null
+            val rows = JSONObject(body).optJSONArray("data") ?: return null
+
+            // 1) Correspondance exacte de ticker.
+            for (i in 0 until rows.length()) {
+                val row = rows.optJSONObject(i) ?: continue
+                if (row.optString("ticker").equals(ticker, ignoreCase = true)) {
+                    return row.optString("isin").takeIf { it.isNotBlank() }
+                }
+            }
+            // 2) Sinon, une unique ligne partageant ≥ 2 mots significatifs du nom.
+            val nameWords = significantWords(name)
+            val candidates = mutableListOf<String>()
+            for (i in 0 until rows.length()) {
+                val row = rows.optJSONObject(i) ?: continue
+                val rowWords = significantWords(row.optString("name"))
+                if ((rowWords intersect nameWords).size >= 2) {
+                    row.optString("isin").takeIf { it.isNotBlank() }?.let { candidates.add(it) }
+                }
+            }
+            return candidates.singleOrNull()
+        }
+    }
+
+    /** Mots discriminants d'un nom de fonds (hors mots génériques). */
+    private fun significantWords(text: String): Set<String> =
+        text.uppercase()
+            .split(Regex("[^A-Z0-9&]+"))
+            .filter { it.length >= 3 }
+            .filterNot { it in genericFundWords }
+            .toSet()
+
+    private val genericFundWords = setOf(
+        "ETF", "UCITS", "ACC", "DIST", "THE", "AND", "EUR", "USD", "FUND", "INDEX"
+    )
 
     private fun parseJustEtfCountries(html: String): List<SectorWeight> {
         val start = html.indexOf(">Countries<").takeIf { it >= 0 } ?: return emptyList()
@@ -270,6 +345,7 @@ class StockRepository(context: Context) {
             .header("User-Agent", USER_AGENT)
             .header("Accept", "text/html")
             .header("Accept-Language", "en")
+            .cacheControl(CacheControl.FORCE_NETWORK)
             .build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
@@ -603,6 +679,5 @@ class StockRepository(context: Context) {
     companion object {
         private const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
-        private const val JUSTETF_SOURCE = "justETF (répartition réelle du fonds)"
     }
 }
