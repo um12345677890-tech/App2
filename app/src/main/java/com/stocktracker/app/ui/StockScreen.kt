@@ -1,5 +1,7 @@
 package com.stocktracker.app.ui
 
+import android.content.Context
+import android.content.Intent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -23,12 +25,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.automirrored.filled.ShowChart
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -67,10 +73,13 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.stocktracker.app.data.Quote
@@ -110,6 +119,39 @@ fun StockScreen(viewModel: StockViewModel = viewModel()) {
         if (selectedTab == 1) viewModel.loadCompositions()
     }
 
+    val context = LocalContext.current
+    var menuOpen by remember { mutableStateOf(false) }
+
+    // Tri appliqué à l'affichage (l'ordre d'ajout reste l'ordre de stockage).
+    val sortedTickers = remember(state.tickers, state.sortOrder) {
+        when (state.sortOrder) {
+            SortOrder.AJOUT -> state.tickers
+            SortOrder.VALEUR -> state.tickers.sortedByDescending {
+                it.quantity * (it.quote?.price ?: 0.0)
+            }
+            SortOrder.PLUS_VALUE -> state.tickers.sortedByDescending {
+                val invested = it.quantity * it.pru
+                val value = it.quantity * (it.quote?.price ?: 0.0)
+                if (invested > 0.0) (value - invested) / invested else Double.NEGATIVE_INFINITY
+            }
+            SortOrder.ALPHA -> state.tickers.sortedBy {
+                (it.quote?.name ?: it.symbol).lowercase()
+            }
+        }
+    }
+
+    // Valeur totale des positions par devise, pour le poids de chaque position.
+    val portfolioValueByCurrency = remember(state.tickers) {
+        val totals = mutableMapOf<String, Double>()
+        state.tickers.forEach { ticker ->
+            val quote = ticker.quote ?: return@forEach
+            if (ticker.quantity <= 0.0) return@forEach
+            val symbol = currencySymbolOf(quote.currency)
+            totals[symbol] = (totals[symbol] ?: 0.0) + ticker.quantity * quote.price
+        }
+        totals
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -117,6 +159,44 @@ fun StockScreen(viewModel: StockViewModel = viewModel()) {
                     Column {
                         Text("Suivi Bourse", fontWeight = FontWeight.Bold)
                         LiveStatusLine(state.lastUpdateMillis, state.isRefreshing)
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Menu")
+                    }
+                    DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false }
+                    ) {
+                        Text(
+                            text = "Trier par",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                        )
+                        SortOrder.entries.forEach { order ->
+                            DropdownMenuItem(
+                                text = { Text(order.label) },
+                                leadingIcon = {
+                                    if (state.sortOrder == order) {
+                                        Icon(Icons.Default.Check, contentDescription = null)
+                                    }
+                                },
+                                onClick = {
+                                    viewModel.setSortOrder(order)
+                                    menuOpen = false
+                                }
+                            )
+                        }
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("Exporter le portefeuille (CSV)") },
+                            onClick = {
+                                menuOpen = false
+                                exportPortfolioCsv(context, state.tickers)
+                            }
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -167,9 +247,16 @@ fun StockScreen(viewModel: StockViewModel = viewModel()) {
                     item(key = "portfolio-summary") {
                         PortfolioSummaryCard(state.tickers)
                     }
-                    items(state.tickers, key = { it.symbol }) { ticker ->
+                    items(sortedTickers, key = { it.symbol }) { ticker ->
+                        val share = ticker.quote?.let { quote ->
+                            val total = portfolioValueByCurrency[currencySymbolOf(quote.currency)]
+                            if (ticker.quantity > 0.0 && total != null && total > 0.0) {
+                                ticker.quantity * quote.price / total
+                            } else null
+                        }
                         TickerCard(
                             ticker = ticker,
+                            portfolioShare = share,
                             onRemove = { viewModel.removeSymbol(ticker.symbol) },
                             onEditHolding = { editingHolding = ticker },
                             onOpenDetail = { detailSymbol = ticker.symbol }
@@ -371,6 +458,7 @@ private fun LiveStatusLine(lastUpdateMillis: Long?, isRefreshing: Boolean) {
 @Composable
 private fun TickerCard(
     ticker: TickerUi,
+    portfolioShare: Double?,
     onRemove: () -> Unit,
     onEditHolding: () -> Unit,
     onOpenDetail: () -> Unit
@@ -451,7 +539,11 @@ private fun TickerCard(
                     QuoteContent(quote, staleError = ticker.error)
                     if (ticker.quantity > 0.0) {
                         Spacer(Modifier.height(12.dp))
-                        PositionSection(ticker = ticker, quote = quote)
+                        PositionSection(
+                            ticker = ticker,
+                            quote = quote,
+                            portfolioShare = portfolioShare
+                        )
                     }
                 }
             }
@@ -461,7 +553,7 @@ private fun TickerCard(
 
 /** Position détenue sur la valeur : quantité, PRU, investi, valeur et plus-value. */
 @Composable
-private fun PositionSection(ticker: TickerUi, quote: Quote) {
+private fun PositionSection(ticker: TickerUi, quote: Quote, portfolioShare: Double?) {
     val currencySymbol = currencySymbolOf(quote.currency)
     val invested = ticker.quantity * ticker.pru
     val value = ticker.quantity * quote.price
@@ -493,6 +585,13 @@ private fun PositionSection(ticker: TickerUi, quote: Quote) {
                     formatOrDash(value, currencySymbol),
                     modifier = Modifier.weight(1f)
                 )
+                if (portfolioShare != null) {
+                    StatItem(
+                        "Poids",
+                        String.format(Locale.FRANCE, "%.1f %%", portfolioShare * 100),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
             Spacer(Modifier.height(8.dp))
             Row(
@@ -613,6 +712,49 @@ private fun PortfolioSummaryCard(tickers: List<TickerUi>) {
             }
         }
     }
+}
+
+/** Exporte le portefeuille en CSV (séparateur « ; », décimales à la française). */
+private fun exportPortfolioCsv(context: Context, tickers: List<TickerUi>) {
+    fun number(value: Double) = String.format(Locale.FRANCE, "%.4f", value)
+
+    val csv = buildString {
+        append("symbole;nom;devise;quantite;pru;cours;investi;valeur;plus_value;plus_value_pct\n")
+        tickers.forEach { ticker ->
+            val quote = ticker.quote
+            val invested = ticker.quantity * ticker.pru
+            val value = ticker.quantity * (quote?.price ?: 0.0)
+            val gain = value - invested
+            val gainPercent = if (invested > 0.0) gain / invested * 100.0 else 0.0
+            append(
+                listOf(
+                    ticker.symbol,
+                    (quote?.name ?: "").replace(';', ','),
+                    quote?.currency ?: "",
+                    number(ticker.quantity),
+                    number(ticker.pru),
+                    number(quote?.price ?: 0.0),
+                    number(invested),
+                    number(value),
+                    number(gain),
+                    number(gainPercent)
+                ).joinToString(";")
+            )
+            append('\n')
+        }
+    }
+
+    val exportDir = File(context.cacheDir, "exports").apply { mkdirs() }
+    val file = File(exportDir, "portefeuille.csv")
+    file.writeText(csv)
+
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/csv"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(intent, "Exporter le portefeuille"))
 }
 
 /** Saisie de la position : nombre de parts détenues et PRU. */

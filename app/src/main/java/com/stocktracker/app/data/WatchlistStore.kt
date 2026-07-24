@@ -68,9 +68,16 @@ class WatchlistStore(context: Context) {
 
     private fun defaultHoldings() = DEFAULT_SYMBOLS.map { Holding(symbol = it) }
 
+    fun loadSortOrder(): String = prefs.getString(KEY_SORT_ORDER, "") ?: ""
+
+    fun saveSortOrder(order: String) {
+        prefs.edit().putString(KEY_SORT_ORDER, order).apply()
+    }
+
     companion object {
         private const val KEY_HOLDINGS = "holdings"
         private const val KEY_SYMBOLS_LEGACY = "symbols"
+        private const val KEY_SORT_ORDER = "sort_order"
         val DEFAULT_SYMBOLS = listOf("WPEA.PA", "PAEEM.PA")
     }
 }

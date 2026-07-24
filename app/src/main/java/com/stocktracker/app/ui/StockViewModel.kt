@@ -37,10 +37,19 @@ data class TickerUi(
     val pru: Double = 0.0
 )
 
+/** Ordres de tri des cartes de l'onglet Cours. */
+enum class SortOrder(val label: String) {
+    AJOUT("Ordre d'ajout"),
+    VALEUR("Valeur détenue"),
+    PLUS_VALUE("Plus-value en %"),
+    ALPHA("Alphabétique")
+}
+
 data class UiState(
     val tickers: List<TickerUi> = emptyList(),
     val lastUpdateMillis: Long? = null,
-    val isRefreshing: Boolean = false
+    val isRefreshing: Boolean = false,
+    val sortOrder: SortOrder = SortOrder.AJOUT
 )
 
 /** Composition d'une position pour l'onglet dédié. */
@@ -99,7 +108,9 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
                         quote = cachedQuotes[it.symbol]
                     )
                 },
-                lastUpdateMillis = cachedAt
+                lastUpdateMillis = cachedAt,
+                sortOrder = runCatching { SortOrder.valueOf(store.loadSortOrder()) }
+                    .getOrDefault(SortOrder.AJOUT)
             )
         }
     )
@@ -207,6 +218,11 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(tickers = updated) }
         persist(updated)
         refreshNow()
+    }
+
+    fun setSortOrder(order: SortOrder) {
+        _uiState.update { it.copy(sortOrder = order) }
+        store.saveSortOrder(order.name)
     }
 
     /** Met à jour la position détenue (quantité de parts et PRU) d'une valeur. */
