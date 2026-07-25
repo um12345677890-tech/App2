@@ -24,7 +24,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,8 +51,8 @@ private fun colorFor(index: Int, label: String): Color =
     else DonutPalette[index % DonutPalette.size]
 
 /**
- * Onglet « Composition » : allocation géographique (portefeuille puis chaque
- * position) et répartition sectorielle de chaque position.
+ * Onglet « Composition » : allocation géographique et répartition sectorielle
+ * de chaque position.
  */
 @Composable
 fun CompositionTab(
@@ -61,43 +60,11 @@ fun CompositionTab(
     compositions: Map<String, CompositionUi>,
     modifier: Modifier = Modifier
 ) {
-    val portfolioCountries = remember(tickers, compositions) {
-        aggregatePortfolioCountries(tickers, compositions)
-    }
-
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        if (portfolioCountries.isNotEmpty()) {
-            item(key = "portfolio-geo") {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Allocation géographique du portefeuille",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        DonutWithLegend(entries = portfolioCountries)
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = "Pondérée par la valeur de chaque position détenue.",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontStyle = FontStyle.Italic,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
         items(tickers, key = { it.symbol }) { ticker ->
             CompositionCard(
                 ticker = ticker,
@@ -105,41 +72,6 @@ fun CompositionTab(
             )
         }
     }
-}
-
-/**
- * Agrège l'allocation par pays de toutes les positions détenues, pondérée par
- * leur valeur de marché, puis normalisée sur les positions dont la composition
- * est connue.
- */
-private fun aggregatePortfolioCountries(
-    tickers: List<TickerUi>,
-    compositions: Map<String, CompositionUi>
-): List<SectorWeight> {
-    val positions = tickers.filter { it.quantity > 0.0 && it.quote != null }
-    val totalValue = positions.sumOf { it.quantity * it.quote!!.price }
-    if (totalValue <= 0.0) return emptyList()
-
-    val totals = linkedMapOf<String, Double>()
-    var coveredShare = 0.0
-    positions.forEach { ticker ->
-        val composition = compositions[ticker.symbol] ?: return@forEach
-        if (composition.countries.isEmpty()) return@forEach
-        val share = ticker.quantity * ticker.quote!!.price / totalValue
-        coveredShare += share
-        val sum = composition.countries.sumOf { it.weight }.takeIf { it > 0.0 } ?: 1.0
-        composition.countries.forEach { country ->
-            totals[country.label] =
-                (totals[country.label] ?: 0.0) + share * (country.weight / sum)
-        }
-    }
-    if (coveredShare <= 0.0) return emptyList()
-
-    val (others, named) = totals
-        .map { SectorWeight(it.key, it.value / coveredShare) }
-        .sortedByDescending { it.weight }
-        .partition { it.label == "Autres" }
-    return named + others
 }
 
 @Composable
