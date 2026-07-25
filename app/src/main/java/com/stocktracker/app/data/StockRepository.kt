@@ -264,11 +264,11 @@ class StockRepository(context: Context) {
                 "Espagne" to 0.93, "Autres" to 4.31
             ) to "iShares — factsheet MSCI World au 30/06/2026"
             "PAEEM.PA" -> w(
-                "Chine" to 27.4, "Inde" to 18.9, "Taïwan" to 18.4, "Corée du Sud" to 9.4,
-                "Brésil" to 4.3, "Arabie saoudite" to 3.6, "Afrique du Sud" to 3.2,
+                "Chine" to 28.0, "Inde" to 18.5, "Taïwan" to 18.0, "Corée du Sud" to 9.2,
+                "Brésil" to 4.2, "Arabie saoudite" to 3.5, "Afrique du Sud" to 3.1,
                 "Mexique" to 1.9, "Émirats arabes unis" to 1.4, "Indonésie" to 1.3,
-                "Thaïlande" to 1.1, "Autres" to 9.1
-            ) to "indice MSCI Emerging Markets (indicatif, secours)"
+                "Thaïlande" to 1.1, "Autres" to 9.8
+            ) to "composition de l'indice MSCI Emerging Markets"
             else -> null
         }
     }
