@@ -291,6 +291,40 @@ class StockRepository(context: Context) {
     )
 
     /**
+     * Diagnostic : télécharge la fiche justETF du fonds et renvoie des extraits
+     * ciblés (contexte autour des noms de pays et des marqueurs de section) pour
+     * révéler le format réel de la page, sans dépendre d'une lecture côté serveur
+     * (impossible depuis l'environnement de build). Destiné au partage manuel.
+     */
+    suspend fun fetchJustEtfDiagnostic(symbol: String, name: String): String =
+        withContext(Dispatchers.IO) {
+            val isin = resolveIsin(symbol, name) ?: return@withContext "ISIN introuvable pour $symbol"
+            val html = runCatching {
+                getHtml("https://www.justetf.com/en/etf-profile.html?isin=$isin")
+            }.getOrElse { return@withContext "Échec du téléchargement justETF ($symbol) : ${it.message}" }
+
+            val sb = StringBuilder()
+            sb.append("=== $symbol · ISIN $isin ===\n")
+            sb.append("Taille HTML : ${html.length} caractères\n")
+            val markers = listOf(
+                "Countries", "Country", "Sectors", "China", "India", "Taiwan",
+                "Korea", "Brazil", "Saudi", "\"countries\"", "\"country\"", "geo"
+            )
+            for (m in markers) {
+                val idx = html.indexOf(m)
+                if (idx < 0) {
+                    sb.append("\n[« $m » absent]")
+                    continue
+                }
+                val from = (idx - 40).coerceAtLeast(0)
+                val to = (idx + 260).coerceAtMost(html.length)
+                val snippet = html.substring(from, to).replace('\n', ' ').replace('\r', ' ')
+                sb.append("\n--- « $m » @${idx} ---\n").append(snippet).append('\n')
+            }
+            sb.toString()
+        }
+
+    /**
      * Lit la fiche justETF du fonds par son ISIN exact et en extrait la répartition
      * RÉELLE par pays ET par secteur. La page est validée (elle doit correspondre au
      * fonds demandé) ; tout échec renvoie null et le secours embarqué s'applique.

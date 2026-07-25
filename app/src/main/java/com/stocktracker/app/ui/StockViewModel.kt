@@ -140,6 +140,34 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         _alerts.value = alertStore.load().associateBy { it.symbol }
     }
 
+    // Texte de diagnostic justETF prêt à partager (null quand rien à partager).
+    private val _diagnostic = MutableStateFlow<String?>(null)
+    val diagnostic: StateFlow<String?> = _diagnostic.asStateFlow()
+
+    /** Télécharge (côté téléphone) les fiches justETF des fonds suivis pour diagnostic. */
+    fun runJustEtfDiagnostic() {
+        viewModelScope.launch {
+            val funds = _uiState.value.tickers.filter {
+                (it.quote?.name ?: it.symbol).uppercase().let { n ->
+                    "ETF" in n || "UCITS" in n || "INDEX" in n
+                }
+            }
+            val report = buildString {
+                append("Diagnostic justETF — ${funds.size} fonds\n")
+                funds.forEach { ticker ->
+                    val name = ticker.quote?.name ?: ticker.symbol
+                    append("\n").append(repository.fetchJustEtfDiagnostic(ticker.symbol, name))
+                    append("\n")
+                }
+            }
+            _diagnostic.value = report
+        }
+    }
+
+    fun clearDiagnostic() {
+        _diagnostic.value = null
+    }
+
     // Graphiques mis en cache par clé "SYMBOLE|période" le temps de la session.
     private val _charts = MutableStateFlow<Map<String, ChartUi>>(emptyMap())
     val charts: StateFlow<Map<String, ChartUi>> = _charts.asStateFlow()

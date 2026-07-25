@@ -134,6 +134,15 @@ fun StockScreen(viewModel: StockViewModel = viewModel()) {
     val context = LocalContext.current
     var menuOpen by remember { mutableStateOf(false) }
 
+    // Diagnostic justETF : quand le texte est prêt, on l'écrit et on le partage.
+    val diagnostic by viewModel.diagnostic.collectAsStateWithLifecycle()
+    LaunchedEffect(diagnostic) {
+        diagnostic?.let { text ->
+            shareTextFile(context, "justetf-diagnostic.txt", text, "text/plain")
+            viewModel.clearDiagnostic()
+        }
+    }
+
     // Tri appliqué à l'affichage (l'ordre d'ajout reste l'ordre de stockage).
     val sortedTickers = remember(state.tickers, state.sortOrder) {
         when (state.sortOrder) {
@@ -207,6 +216,13 @@ fun StockScreen(viewModel: StockViewModel = viewModel()) {
                             onClick = {
                                 menuOpen = false
                                 exportPortfolioCsv(context, state.tickers)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Diagnostic justETF (partager)") },
+                            onClick = {
+                                menuOpen = false
+                                viewModel.runJustEtfDiagnostic()
                             }
                         )
                     }
@@ -785,17 +801,28 @@ private fun exportPortfolioCsv(context: Context, tickers: List<TickerUi>) {
         }
     }
 
+    shareTextFile(context, "portefeuille.csv", csv, "text/csv", "Exporter le portefeuille")
+}
+
+/** Écrit un texte dans un fichier du cache et ouvre le partage Android. */
+private fun shareTextFile(
+    context: Context,
+    fileName: String,
+    text: String,
+    mime: String,
+    chooserTitle: String = "Partager"
+) {
     val exportDir = File(context.cacheDir, "exports").apply { mkdirs() }
-    val file = File(exportDir, "portefeuille.csv")
-    file.writeText(csv)
+    val file = File(exportDir, fileName)
+    file.writeText(text)
 
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val intent = Intent(Intent.ACTION_SEND).apply {
-        type = "text/csv"
+        type = mime
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    context.startActivity(Intent.createChooser(intent, "Exporter le portefeuille"))
+    context.startActivity(Intent.createChooser(intent, chooserTitle))
 }
 
 /** Saisie d'une alerte de prix : seuil haut et/ou seuil bas. */
