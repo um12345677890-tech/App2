@@ -2,6 +2,8 @@ package com.stocktracker.app.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,9 +45,11 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import com.stocktracker.app.data.ChartData
 import com.stocktracker.app.ui.theme.Gain
 import com.stocktracker.app.ui.theme.Loss
@@ -215,9 +219,50 @@ private fun PeriodChartSection(data: ChartData, periodLabel: String) {
         }
     }
 
+    // Point actuellement touché sur la courbe (repère interactif).
+    var selected by remember(data) { mutableStateOf<Int?>(null) }
+    val selectedPoint = selected?.let { data.points.getOrNull(it) }
+
+    if (selectedPoint != null) {
+        val pctFromStart = if (data.startPrice != 0.0) {
+            (selectedPoint.close - data.startPrice) / data.startPrice * 100.0
+        } else {
+            0.0
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = formatMoney(selectedPoint.close.toDouble(), currencySymbol),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.size(8.dp))
+            Text(
+                text = formatSignedPercent(pctFromStart),
+                style = MaterialTheme.typography.labelLarge,
+                color = if (pctFromStart >= 0) Gain else Loss,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = dateFormat.format(Date(selectedPoint.timeSeconds * 1000)),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    } else {
+        Text(
+            text = "Touchez ou glissez sur le graphique pour lire le cours à une date",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+    Spacer(Modifier.height(8.dp))
+
     PeriodChart(
         data = data,
         lineColor = chartColor,
+        selectedIndex = selected,
+        onSelectedChange = { selected = it },
         modifier = Modifier
             .fillMaxWidth()
             .height(240.dp)
@@ -268,15 +313,43 @@ private fun DetailStat(label: String, value: String, valueColor: Color? = null) 
     }
 }
 
-/** Grand graphique de période : ligne + dégradé + repère du cours de départ. */
+/**
+ * Grand graphique de période : ligne + dégradé + repère du cours de départ, et
+ * repère interactif (croix + point) suivant le doigt pour lire le cours à une date.
+ */
 @Composable
 private fun PeriodChart(
     data: ChartData,
     lineColor: Color,
+    selectedIndex: Int?,
+    onSelectedChange: (Int?) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val baselineColor = MaterialTheme.colorScheme.onSurfaceVariant
-    Canvas(modifier = modifier) {
+    val markerColor = MaterialTheme.colorScheme.onSurface
+    val pointCount = data.points.size
+    Canvas(
+        modifier = modifier.pointerInput(pointCount) {
+            awaitEachGesture {
+                fun update(x: Float) {
+                    if (pointCount < 2) return
+                    val idx = ((x / size.width) * (pointCount - 1))
+                        .roundToInt()
+                        .coerceIn(0, pointCount - 1)
+                    onSelectedChange(idx)
+                }
+                val down = awaitFirstDown()
+                update(down.position.x)
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val change = event.changes.firstOrNull() ?: break
+                    if (!change.pressed) break
+                    update(change.position.x)
+                    change.consume()
+                }
+            }
+        }
+    ) {
         val values = data.points
         val min = minOf(data.periodLow.toFloat(), data.startPrice.toFloat())
         val max = maxOf(data.periodHigh.toFloat(), data.startPrice.toFloat())
@@ -322,5 +395,19 @@ private fun PeriodChart(
             color = lineColor,
             style = Stroke(width = 4f, cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
+
+        // Repère interactif : ligne verticale + point sur la courbe au doigt.
+        if (selectedIndex != null && selectedIndex in values.indices) {
+            val cx = selectedIndex * stepX
+            val cy = yFor(values[selectedIndex].close)
+            drawLine(
+                color = markerColor.copy(alpha = 0.6f),
+                start = Offset(cx, 0f),
+                end = Offset(cx, size.height),
+                strokeWidth = 2f
+            )
+            drawCircle(color = lineColor, radius = 11f, center = Offset(cx, cy))
+            drawCircle(color = markerColor, radius = 5f, center = Offset(cx, cy))
+        }
     }
 }

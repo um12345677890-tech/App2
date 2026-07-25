@@ -30,8 +30,10 @@ Markets UCITS ETF) sur Euronext Paris.
   pour les ETF américains. La source réellement utilisée (avec l'ISIN) est affichée
   sous le graphique ; aucun chiffre inventé n'est présenté comme réel. Pour une action,
   le pays vient de Yahoo
-- 📈 **Écran détail** en touchant une valeur : graphique interactif par période
-  (1J, 5J, 1M, 6M, 1A, 5A, Max), performance de la période, plus haut/plus bas
+- 📈 **Écran détail** en touchant une valeur : graphique **interactif** par période
+  (1J, 5J, 1M, 6M, 1A, 5A, Max) — glissez le doigt sur la courbe pour lire le cours et
+  la date à n'importe quel point (repère + étiquette) —, performance de la période,
+  plus haut/plus bas
 - 🔔 **Alertes de prix** : seuils haut/bas par valeur, vérifiés environ toutes les
   15 minutes en arrière-plan (WorkManager), notification au franchissement puis
   désactivation du seuil déclenché
