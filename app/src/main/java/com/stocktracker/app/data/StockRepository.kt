@@ -264,10 +264,10 @@ class StockRepository(context: Context) {
                 "Espagne" to 0.93, "Autres" to 4.31
             ) to "iShares — factsheet MSCI World au 30/06/2026"
             "PAEEM.PA" -> w(
-                "Chine" to 27.0, "Inde" to 19.0, "Taïwan" to 19.0, "Corée du Sud" to 10.0,
-                "Brésil" to 4.0, "Arabie saoudite" to 3.5, "Afrique du Sud" to 3.0,
-                "Mexique" to 1.8, "Émirats arabes unis" to 1.5, "Indonésie" to 1.3,
-                "Autres" to 9.9
+                "Chine" to 27.4, "Inde" to 18.9, "Taïwan" to 18.4, "Corée du Sud" to 9.4,
+                "Brésil" to 4.3, "Arabie saoudite" to 3.6, "Afrique du Sud" to 3.2,
+                "Mexique" to 1.9, "Émirats arabes unis" to 1.4, "Indonésie" to 1.3,
+                "Thaïlande" to 1.1, "Autres" to 9.1
             ) to "indice MSCI Emerging Markets (indicatif, secours)"
             else -> null
         }
@@ -307,12 +307,16 @@ class StockRepository(context: Context) {
             significantWords(name).count { html.contains(it, ignoreCase = true) } >= 2
         if (!pageMatchesFund) return null
 
+        // Pays : d'abord par section, puis — plus robuste — par noms de pays connus
+        // suivis d'un pourcentage (la section « pays » de justETF a un balisage
+        // différent des secteurs, avec drapeaux, que le parseur de section rate).
         val countries = parseWeightSection(
             html,
             startMarkers = listOf(">Countries<", ">Country<"),
             endMarkers = listOf(">Sectors<", ">Sector<", ">Holdings<", ">Instrument"),
             labelMapper = ::countryOrOther
-        )
+        ).takeIf { it.size >= 2 } ?: parseCountriesByNames(html)
+
         val sectors = parseWeightSection(
             html,
             startMarkers = listOf(">Sectors<", ">Sector<"),
@@ -393,6 +397,44 @@ class StockRepository(context: Context) {
     private val genericFundWords = setOf(
         "ETF", "UCITS", "ACC", "DIST", "THE", "AND", "EUR", "USD", "FUND", "INDEX"
     )
+
+    /** Noms de pays (anglais) susceptibles d'apparaître sur une fiche justETF. */
+    private val countryNamesEn = listOf(
+        "United States", "Japan", "United Kingdom", "Canada", "France", "Switzerland",
+        "Germany", "Australia", "Netherlands", "Spain", "Italy", "Sweden", "Denmark",
+        "Finland", "Norway", "Belgium", "Ireland", "Austria", "Portugal", "Israel",
+        "New Zealand", "Singapore", "Hong Kong", "China", "Taiwan", "India",
+        "South Korea", "Korea", "Brazil", "Saudi Arabia", "South Africa", "Mexico",
+        "Indonesia", "Thailand", "Malaysia", "Philippines", "Poland", "Greece",
+        "Turkey", "United Arab Emirates", "Qatar", "Kuwait", "Chile", "Peru",
+        "Colombia", "Hungary", "Czech Republic", "Egypt", "Luxembourg"
+    )
+
+    /**
+     * Extrait la répartition par pays en cherchant chaque nom de pays connu suivi,
+     * dans une courte fenêtre, d'un pourcentage. Robuste au balisage à drapeaux de
+     * justETF que le parseur de section ne capte pas. Validé (total plausible).
+     */
+    private fun parseCountriesByNames(html: String): List<SectorWeight> {
+        val pctRegex = Regex("([0-9]{1,2}(?:[.,][0-9]{1,2})?)\\s*%")
+        val result = mutableListOf<SectorWeight>()
+        for (en in countryNamesEn) {
+            val label = countryLabel(en)
+            if (result.any { it.label == label }) continue
+            val idx = html.indexOf(">$en<").takeIf { it >= 0 }
+                ?: html.indexOf(">$en ").takeIf { it >= 0 }
+                ?: html.indexOf("$en</").takeIf { it >= 0 }
+                ?: continue
+            val window = html.substring(idx, (idx + 180).coerceAtMost(html.length))
+            val pct = pctRegex.find(window)?.groupValues?.get(1)
+                ?.replace(',', '.')?.toDoubleOrNull() ?: continue
+            if (pct in 0.05..100.0) result.add(SectorWeight(label, pct / 100.0))
+        }
+        val total = result.sumOf { it.weight }
+        if (result.size < 3 || total < 0.5 || total > 1.1) return emptyList()
+        result.sortByDescending { it.weight }
+        return result
+    }
 
     private fun countryOrOther(raw: String): String =
         if (isOtherLabel(raw)) "Autres" else countryLabel(raw)
