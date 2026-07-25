@@ -5,6 +5,9 @@ on:
     branches: ["**"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -23,8 +26,28 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon
 
-      - name: Upload APK
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk suivi-bourse.apk
+
+      - name: Upload APK (artifact)
         uses: actions/upload-artifact@v4
         with:
           name: suivi-bourse-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: suivi-bourse.apk
+
+      # Publie l'APK dans une Release GitHub : lien de téléchargement direct,
+      # sans connexion, pratique depuis un téléphone.
+      - name: Publish APK to Release
+        if: github.ref == 'refs/heads/claude/android-stock-tracker-app-1mzrxa'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Suivi Bourse — dernière version
+          body: |
+            APK de debug le plus récent de l'application Suivi Bourse.
+            Téléchargement direct : suivi-bourse.apk (installable par-dessus
+            la version précédente, sans désinstaller).
+          files: suivi-bourse.apk
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
