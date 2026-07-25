@@ -411,27 +411,48 @@ class StockRepository(context: Context) {
     )
 
     /**
-     * Extrait la répartition par pays en cherchant chaque nom de pays connu suivi,
-     * dans une courte fenêtre, d'un pourcentage. Robuste au balisage à drapeaux de
-     * justETF que le parseur de section ne capte pas. Validé (total plausible).
+     * Extrait la répartition par pays en cherchant chaque nom de pays connu, sous
+     * plusieurs formes (texte HTML, JSON, attribut), suivi d'un pourcentage ou
+     * d'une valeur numérique JSON. Robuste au balisage à drapeaux ET aux données de
+     * graphique embarquées en JSON. Validé par le total (garde-fou anti-aberrant).
      */
     private fun parseCountriesByNames(html: String): List<SectorWeight> {
         val pctRegex = Regex("([0-9]{1,2}(?:[.,][0-9]{1,2})?)\\s*%")
+        // Valeur JSON juste après le nom : "China":27.4  ou  ["China",0.274]
+        val jsonNumRegex = Regex("[:,]\\s*\"?([0-9]{1,3}(?:[.,][0-9]{1,4})?)\"?")
+
         val result = mutableListOf<SectorWeight>()
         for (en in countryNamesEn) {
             val label = countryLabel(en)
             if (result.any { it.label == label }) continue
-            val idx = html.indexOf(">$en<").takeIf { it >= 0 }
-                ?: html.indexOf(">$en ").takeIf { it >= 0 }
-                ?: html.indexOf("$en</").takeIf { it >= 0 }
-                ?: continue
-            val window = html.substring(idx, (idx + 180).coerceAtMost(html.length))
-            val pct = pctRegex.find(window)?.groupValues?.get(1)
-                ?.replace(',', '.')?.toDoubleOrNull() ?: continue
-            if (pct in 0.05..100.0) result.add(SectorWeight(label, pct / 100.0))
+            val markers = listOf(">$en<", ">$en ", "$en</", "\"$en\"", "'$en'", ">$en,")
+            var weight: Double? = null
+
+            for (marker in markers) {
+                var from = html.indexOf(marker)
+                while (from >= 0) {
+                    val window = html.substring(from, (from + 160).coerceAtMost(html.length))
+                    // 1) Pourcentage explicite prioritaire (ex. « 27,4 % »).
+                    val pct = pctRegex.find(window)?.groupValues?.get(1)
+                        ?.replace(',', '.')?.toDoubleOrNull()
+                    if (pct != null && pct in 0.05..70.0) {
+                        weight = pct; break
+                    }
+                    // 2) Sinon, valeur numérique JSON (fraction 0–1 ou pourcentage).
+                    val raw = jsonNumRegex.find(window)?.groupValues?.get(1)
+                        ?.replace(',', '.')?.toDoubleOrNull()
+                    if (raw != null) {
+                        val asPct = if (raw <= 1.0) raw * 100.0 else raw
+                        if (asPct in 0.05..70.0) { weight = asPct; break }
+                    }
+                    from = html.indexOf(marker, from + marker.length)
+                }
+                if (weight != null) break
+            }
+            weight?.let { result.add(SectorWeight(label, it / 100.0)) }
         }
         val total = result.sumOf { it.weight }
-        if (result.size < 3 || total < 0.5 || total > 1.1) return emptyList()
+        if (result.size < 3 || total < 0.5 || total > 1.15) return emptyList()
         result.sortByDescending { it.weight }
         return result
     }
