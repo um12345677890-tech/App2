@@ -173,11 +173,21 @@ class StockRepository(context: Context) {
      */
     suspend fun fetchComposition(symbol: String, name: String): Composition =
         withContext(Dispatchers.IO) {
-            // 1) Pays du fonds : source fiable hors ligne d'abord (jamais Yahoo).
-            val countryData = resolveCountryAllocation(symbol, name)
+            val looksLikeFund = name.uppercase().let {
+                "ETF" in it || "UCITS" in it || "INDEX" in it
+            }
 
-            // 2) Secteurs + localisation via Yahoo, best effort : un échec ici ne
-            //    fait pas perdre la répartition par pays déjà obtenue.
+            // 1) Source PRINCIPALE d'un fonds : sa fiche justETF, lue par ISIN exact,
+            //    qui donne la répartition RÉELLE et à jour par pays ET par secteur.
+            //    En direct : peut échouer selon le réseau → on retombe sur le secours.
+            val justEtf = if (looksLikeFund) {
+                runCatching { fetchJustEtfProfile(symbol, name) }.getOrNull()
+            } else {
+                null
+            }
+
+            // 2) Profil Yahoo : secteurs des ETF américains + pays d'une action, au
+            //    mieux ; son échec ne fait rien perdre de ce qui précède.
             val profile = runCatching {
                 try {
                     fetchYahooProfile(symbol)
@@ -187,16 +197,41 @@ class StockRepository(context: Context) {
                 }
             }.getOrNull()
 
-            val countries = countryData?.first
-                ?: profile?.stockCountries?.takeIf { it.isNotEmpty() }
-                ?: emptyList()
-            val countriesSource = countryData?.second ?: profile?.stockCountriesSource
+            // Pays : justETF (réel) → factsheet/indice embarqué → pays de l'action.
+            val embedded = if (looksLikeFund) resolveEmbeddedCountries(symbol, name) else null
+            val countries: List<SectorWeight>
+            val countriesSource: String?
+            when {
+                justEtf != null && justEtf.countries.size >= 2 -> {
+                    countries = justEtf.countries
+                    countriesSource = "justETF · ISIN ${justEtf.isin}"
+                }
+                embedded != null -> {
+                    countries = embedded.first
+                    countriesSource = embedded.second
+                }
+                profile != null && profile.stockCountries.isNotEmpty() -> {
+                    countries = profile.stockCountries
+                    countriesSource = profile.stockCountriesSource
+                }
+                else -> {
+                    countries = emptyList()
+                    countriesSource = null
+                }
+            }
 
-            if (countries.isEmpty() && (profile == null || profile.sectors.isEmpty())) {
+            // Secteurs : justETF (réel) → Yahoo (réel). Aucun secteur inventé.
+            val sectors = when {
+                justEtf != null && justEtf.sectors.size >= 2 -> justEtf.sectors
+                profile != null && profile.sectors.isNotEmpty() -> profile.sectors
+                else -> emptyList()
+            }
+
+            if (countries.isEmpty() && sectors.isEmpty()) {
                 throw IOException("Composition indisponible")
             }
             Composition(
-                sectors = profile?.sectors ?: emptyList(),
+                sectors = sectors,
                 countries = countries,
                 countriesSource = countriesSource,
                 location = profile?.location ?: regionFromName(name)
@@ -204,31 +239,14 @@ class StockRepository(context: Context) {
         }
 
     /**
-     * Détermine l'allocation par pays d'un ETF, par priorité décroissante de
-     * fiabilité, sans aucune dépendance réseau pour les deux premières sources :
-     *  1. table faisant autorité (chiffres officiels des émetteurs) ;
-     *  2. indice reconnu (factsheet embarquée) ;
-     *  3. données Amundi en direct pour les fonds Amundi non couverts (best effort) ;
-     *  4. justETF pour les autres ETF (correspondance stricte du fonds).
-     * Renvoie null pour une action (son pays vient alors du profil Yahoo).
+     * Répartition par pays embarquée, utilisée UNIQUEMENT en secours si justETF est
+     * indisponible : table faisant autorité (factsheets émetteurs) puis indice reconnu.
      */
-    private fun resolveCountryAllocation(
+    private fun resolveEmbeddedCountries(
         symbol: String,
         name: String
-    ): Pair<List<SectorWeight>, String>? {
-        authoritativeAllocation(symbol)?.let { return it }
-        indexAllocation(name)?.let { return it }
-
-        val upper = name.uppercase()
-        val looksLikeFund = "ETF" in upper || "UCITS" in upper || "INDEX" in upper
-        if (!looksLikeFund) return null
-
-        if ("AMUNDI" in upper) {
-            runCatching { fetchAmundiCountries(symbol, name) }.getOrNull()?.let { return it }
-        }
-        runCatching { fetchJustEtfCountries(symbol, name) }.getOrNull()?.let { return it }
-        return null
-    }
+    ): Pair<List<SectorWeight>, String>? =
+        authoritativeAllocation(symbol) ?: indexAllocation(name)
 
     /**
      * Allocation par pays faisant autorité pour les fonds détenus, reprise des
@@ -250,7 +268,7 @@ class StockRepository(context: Context) {
                 "Brésil" to 4.0, "Arabie saoudite" to 3.5, "Afrique du Sud" to 3.0,
                 "Mexique" to 1.8, "Émirats arabes unis" to 1.5, "Indonésie" to 1.3,
                 "Autres" to 9.9
-            ) to "Amundi — indice MSCI Emerging Markets"
+            ) to "indice MSCI Emerging Markets (indicatif, secours)"
             else -> null
         }
     }
@@ -265,34 +283,51 @@ class StockRepository(context: Context) {
         "CW8.PA" to "LU1681043599"
     )
 
+    /** Répartition réelle d'un fonds (pays + secteurs) lue sur sa fiche justETF. */
+    private class JustEtfProfile(
+        val countries: List<SectorWeight>,
+        val sectors: List<SectorWeight>,
+        val isin: String
+    )
+
     /**
-     * Allocation par pays réelle du fonds, lue sur sa fiche justETF (endpoints non
-     * officiels : tout échec renvoie null et le repli sur l'indice s'applique).
-     * Retourne les pays et le libellé de source incluant l'ISIN utilisé.
+     * Lit la fiche justETF du fonds par son ISIN exact et en extrait la répartition
+     * RÉELLE par pays ET par secteur. La page est validée (elle doit correspondre au
+     * fonds demandé) ; tout échec renvoie null et le secours embarqué s'applique.
      */
-    private fun fetchJustEtfCountries(
-        symbol: String,
-        name: String
-    ): Pair<List<SectorWeight>, String>? {
+    private fun fetchJustEtfProfile(symbol: String, name: String): JustEtfProfile? {
         val isin = resolveIsin(symbol, name) ?: return null
         val html = getHtml("https://www.justetf.com/en/etf-profile.html?isin=$isin")
 
-        // Sécurité anti-mauvais fonds : la fiche doit mentionner le ticker ou
-        // au moins deux mots significatifs du nom du fonds.
+        // Sécurité anti-mauvais fonds : la fiche doit mentionner l'ISIN, le ticker
+        // ou au moins deux mots significatifs du nom du fonds.
         val ticker = symbol.substringBefore('.')
-        val pageMatchesFund = html.contains(ticker, ignoreCase = true) ||
+        val pageMatchesFund = html.contains(isin, ignoreCase = true) ||
+            html.contains(ticker, ignoreCase = true) ||
             significantWords(name).count { html.contains(it, ignoreCase = true) } >= 2
         if (!pageMatchesFund) return null
 
-        val countries = parseJustEtfCountries(html)
-        return countries.takeIf { it.size >= 2 }?.let { it to "justETF · ISIN $isin" }
+        val countries = parseWeightSection(
+            html,
+            startMarkers = listOf(">Countries<", ">Country<"),
+            endMarkers = listOf(">Sectors<", ">Sector<", ">Holdings<", ">Instrument"),
+            labelMapper = ::countryOrOther
+        )
+        val sectors = parseWeightSection(
+            html,
+            startMarkers = listOf(">Sectors<", ">Sector<"),
+            endMarkers = listOf(">Countries<", ">Country<", ">Holdings<", ">Instrument", ">Top "),
+            labelMapper = ::sectorOrOther
+        )
+        if (countries.size < 2 && sectors.size < 2) return null
+        return JustEtfProfile(countries, sectors, isin)
     }
 
     private fun resolveIsin(symbol: String, name: String): String? {
         isinCache[symbol]?.let { return it }
-        val ticker = symbol.substringBefore('.')
-        val isin = runCatching { searchIsinViaJustEtf(ticker, name) }.getOrNull()
-            ?: knownIsins[symbol]
+        // ISIN exact connu d'abord (fiable) ; sinon recherche justETF stricte.
+        val isin = knownIsins[symbol]
+            ?: runCatching { searchIsinViaJustEtf(symbol.substringBefore('.'), name) }.getOrNull()
         if (isin != null) isinCache[symbol] = isin
         return isin
     }
@@ -359,17 +394,44 @@ class StockRepository(context: Context) {
         "ETF", "UCITS", "ACC", "DIST", "THE", "AND", "EUR", "USD", "FUND", "INDEX"
     )
 
-    private fun parseJustEtfCountries(html: String): List<SectorWeight> =
-        parseCountriesSection(html, listOf(">Countries<"), listOf(">Sectors<", ">Sector<"))
+    private fun countryOrOther(raw: String): String =
+        if (isOtherLabel(raw)) "Autres" else countryLabel(raw)
+
+    private fun sectorOrOther(raw: String): String =
+        if (isOtherLabel(raw)) "Autres" else justEtfSectorLabel(raw)
+
+    private fun isOtherLabel(raw: String): Boolean =
+        raw.equals("Other", true) || raw.equals("Others", true) ||
+            raw.equals("Autre", true) || raw.equals("Autres", true) ||
+            raw.equals("Cash", true) || raw.equals("Cash and/or derivatives", true)
+
+    /** Traduit un nom de secteur justETF (anglais) en français. */
+    private fun justEtfSectorLabel(raw: String): String = when (raw.trim().lowercase()) {
+        "technology", "information technology" -> "Technologie"
+        "financials", "financial services", "financial" -> "Services financiers"
+        "health care", "healthcare" -> "Santé"
+        "consumer discretionary", "consumer cyclical" -> "Consommation cyclique"
+        "consumer staples", "consumer defensive" -> "Consommation de base"
+        "industrials" -> "Industrie"
+        "communication", "communication services",
+        "telecommunications", "telecommunication" -> "Communication"
+        "energy" -> "Énergie"
+        "utilities" -> "Services publics"
+        "materials", "basic materials" -> "Matériaux"
+        "real estate" -> "Immobilier"
+        else -> raw.trim().replaceFirstChar { it.uppercase() }
+    }
 
     /**
-     * Extrait une répartition « pays → pourcentage » de la section délimitée par
-     * les marqueurs fournis, avec garde-fous anti-parsing aberrant.
+     * Extrait une répartition « libellé → pourcentage » de la section délimitée par
+     * les marqueurs fournis, avec garde-fous anti-parsing aberrant. Sert aussi bien
+     * aux pays qu'aux secteurs selon le `labelMapper` fourni.
      */
-    private fun parseCountriesSection(
+    private fun parseWeightSection(
         html: String,
         startMarkers: List<String>,
-        endMarkers: List<String>
+        endMarkers: List<String>,
+        labelMapper: (String) -> String
     ): List<SectorWeight> {
         val start = startMarkers
             .firstNotNullOfOrNull { m -> html.indexOf(m).takeIf { it >= 0 } }
@@ -381,50 +443,23 @@ class StockRepository(context: Context) {
         val segment = html.substring(start, end)
 
         val rowRegex = Regex(
-            ">([A-ZÀ-Ÿ][A-Za-zÀ-ÿ&.,'\\- ]{1,40})<[^%]{0,200}?>([0-9]{1,2}(?:[.,][0-9]{1,2})?)\\s*%<"
+            ">([A-ZÀ-Ÿ][A-Za-zÀ-ÿ&.,'/\\- ]{1,40})<[^%]{0,200}?>([0-9]{1,2}(?:[.,][0-9]{1,2})?)\\s*%<"
         )
-        val countries = mutableListOf<SectorWeight>()
+        val rows = mutableListOf<SectorWeight>()
         for (match in rowRegex.findAll(segment)) {
             val rawLabel = match.groupValues[1].trim()
             val percent = match.groupValues[2].replace(',', '.').toDoubleOrNull() ?: continue
             if (percent <= 0.0 || percent > 100.0) continue
-            val label = when {
-                rawLabel.equals("Other", true) || rawLabel.equals("Others", true) ||
-                    rawLabel.equals("Autre", true) || rawLabel.equals("Autres", true) -> "Autres"
-                else -> countryLabel(rawLabel)
-            }
-            if (countries.none { it.label == label }) {
-                countries.add(SectorWeight(label, percent / 100.0))
+            val label = labelMapper(rawLabel)
+            if (rows.none { it.label == label }) {
+                rows.add(SectorWeight(label, percent / 100.0))
             }
         }
         // Sécurité anti-parsing aberrant : le total doit rester plausible.
-        val total = countries.sumOf { it.weight }
+        val total = rows.sumOf { it.weight }
         if (total < 0.3 || total > 1.1) return emptyList()
-        countries.sortByDescending { it.weight }
-        return countries
-    }
-
-    /**
-     * Allocation par pays d'un fonds Amundi, tentée sur le site Amundi ETF
-     * (endpoint non officiel). Validée strictement : tout échec renvoie null et
-     * le repli (table officielle / indice) s'applique.
-     */
-    private fun fetchAmundiCountries(
-        symbol: String,
-        name: String
-    ): Pair<List<SectorWeight>, String>? {
-        val isin = resolveIsin(symbol, name) ?: return null
-        val html = runCatching {
-            getHtml("https://www.amundietf.fr/fr/particuliers/product/view/$isin")
-        }.getOrNull() ?: return null
-        // La page doit bien correspondre au fonds demandé.
-        if (!html.contains(isin, ignoreCase = true)) return null
-        val countries = parseCountriesSection(
-            html,
-            startMarkers = listOf("géographique", "Géographique", "Countries", "Country"),
-            endMarkers = listOf("Secteur", "secteur", "Sector")
-        )
-        return countries.takeIf { it.size >= 2 }?.let { it to "Amundi · ISIN $isin" }
+        rows.sortByDescending { it.weight }
+        return rows
     }
 
     private fun getHtml(url: String): String {

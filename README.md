@@ -21,22 +21,15 @@ Markets UCITS ETF) sur Euronext Paris.
 - 🧭 **Onglet « Composition »** : répartition sectorielle (barres de pourcentage) et
   localisation géographique de chaque position, via l'API Yahoo `quoteSummary`
   (jeton « crumb » géré automatiquement)
-- 🍩 **Allocation géographique** façon rapport de gestion : graphique en anneau et
-  légende par pays pour chaque position et pour l'ensemble du portefeuille (pondérée
-  par la valeur des positions). L'allocation par pays est déterminée **hors ligne
-  d'abord**, sans dépendre de Yahoo, par ordre de fiabilité décroissante :
-  1. table faisant autorité pour les fonds détenus (chiffres officiels des émetteurs —
-     iShares pour WPEA, Amundi pour PAEEM) ;
-  2. répartition officielle de l'indice reconnu (MSCI World, MSCI EM, ACWI, S&P 500,
-     Euro Stoxx 50, Stoxx 600, CAC 40, Japon) ;
-  3. pour un fonds Amundi non couvert, tentative sur les données Amundi ETF en direct ;
-  4. pour un autre ETF, fiche **justETF** (ISIN résolu via l'endpoint JSON avec
-     correspondance stricte du ticker, fiche validée).
-
-  Les sources en direct (3–4) sont validées strictement ; sans correspondance sûre, la
-  répartition est marquée indisponible plutôt que d'afficher des données douteuses. La
-  source réellement utilisée est affichée sous chaque graphique. Pour une action, le
-  pays vient de Yahoo
+- 🍩 **Allocation géographique et sectorielle** façon rapport de gestion : anneau et
+  légende par pays + barres par secteur, pour chaque position et pour l'ensemble du
+  portefeuille (pondéré par la valeur des positions). Les répartitions **réelles et à
+  jour** sont lues sur la **fiche justETF du fonds, par son ISIN exact** (source
+  principale, pays ET secteurs). En secours, si justETF est indisponible : chiffres de
+  factsheet embarqués pour les pays (iShares MSCI World pour WPEA…) et secteurs Yahoo
+  pour les ETF américains. La source réellement utilisée (avec l'ISIN) est affichée
+  sous le graphique ; aucun chiffre inventé n'est présenté comme réel. Pour une action,
+  le pays vient de Yahoo
 - 📈 **Écran détail** en touchant une valeur : graphique interactif par période
   (1J, 5J, 1M, 6M, 1A, 5A, Max), performance de la période, plus haut/plus bas
 - 🔔 **Alertes de prix** : seuils haut/bas par valeur, vérifiés environ toutes les
